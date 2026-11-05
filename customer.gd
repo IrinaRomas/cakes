@@ -3,6 +3,9 @@ extends "res://chef.gd"
 var waiting := false
 var paid := false
 var bubble: Label
+var order_title := "Круассан"
+var order_price := 15
+var order_xp := 5
 
 func _ready() -> void:
 	super._ready()
@@ -25,6 +28,11 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	super._process(delta)
 	bubble.visible = waiting or paid
-	bubble.text = "+15 монет · +5 опыта" if paid else "Круассан × 1"
+	bubble.text = "+%d монет · +%d опыта" % [order_price, order_xp] if paid else "%s × 1" % order_title
 	bubble.size = Vector2.ZERO
 	bubble.position = Vector2(-bubble.size.x * 0.5, -unit * 2.35)
+
+func set_order(recipe: Dictionary) -> void:
+	order_title = recipe.title
+	order_price = recipe.price
+	order_xp = recipe.xp

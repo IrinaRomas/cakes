@@ -2,6 +2,7 @@ extends Control
 
 signal oven_pressed
 signal register_pressed
+signal display_pressed
 signal layout_changed
 signal hint_changed(message: String)
 const CELLS := 6
@@ -13,6 +14,7 @@ var selected := -1
 var objects: Array[Node2D] = []
 var unit := 48.0
 var origin := Vector2.ZERO
+var display_badge: Label
 
 func _ready() -> void:
 	clip_contents = true
@@ -41,6 +43,19 @@ func _ready() -> void:
 	customer.name = "Customer"
 	add_child(customer)
 	customer.visible = false
+	display_badge = Label.new()
+	display_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	display_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	display_badge.z_index = 100
+	display_badge.add_theme_font_size_override("font_size", 14)
+	display_badge.add_theme_color_override("font_color", Color("344b3f"))
+	var badge_style := StyleBoxFlat.new()
+	badge_style.bg_color = Color("fff9ed")
+	badge_style.set_corner_radius_all(7)
+	badge_style.content_margin_left = 7
+	badge_style.content_margin_right = 7
+	display_badge.add_theme_stylebox_override("normal", badge_style)
+	add_child(display_badge)
 	resized.connect(_arrange)
 	_arrange()
 
@@ -55,6 +70,7 @@ func _arrange() -> void:
 		objects[i].z_index = cells[i].x + cells[i].y + 1
 		objects[i].modulate = Color("c7e6b3") if selected == i else Color.WHITE
 	_update_chef()
+	_position_badge()
 	queue_redraw()
 
 func _draw() -> void:
@@ -88,6 +104,8 @@ func _select(index: int) -> void:
 		selected = index
 		_arrange()
 		hint_changed.emit("%s: нажми на свободную клетку" % TITLES[index])
+	elif index == 1:
+		display_pressed.emit()
 	elif index == 3:
 		register_pressed.emit()
 	else:
@@ -124,6 +142,13 @@ signal arrived
 func _process(delta: float) -> void:
 	_customer_step(delta)
 	if walking and not route.is_empty():
+		if customer_state != "absent" and route[0] == Vector2i(customer_position.round()):
+			if chef_position.is_equal_approx(chef_position.round()):
+				var alternative := find_path(Vector2i(chef_position.round()), route.back(), Vector2i(customer_position.round()))
+				if not alternative.is_empty():
+					route = alternative
+			_update_chef()
+			return
 		var target := Vector2(route[0])
 		var direction := project(target) - project(chef_position)
 		chef.facing_left = direction.x < 0 if absf(direction.x) > 0.01 else chef.facing_left
@@ -204,6 +229,26 @@ var customer_entry := Vector2i(5, 5)
 var customer_route: Array[Vector2i] = []
 var customer_state := "absent"
 var customer_delay := 1.5
+var recipe_pool: Array[String] = ["croissant"]
+var current_recipe_id := "croissant"
+var pending_new_recipe := ""
+var recipe_rotation := 0
+
+func set_recipe_pool(ids: Array[String]) -> void:
+	for id in ids:
+		if id not in recipe_pool:
+			pending_new_recipe = id
+	recipe_pool = ids.duplicate()
+
+func _choose_recipe() -> void:
+	if not pending_new_recipe.is_empty() and pending_new_recipe in recipe_pool:
+		current_recipe_id = pending_new_recipe
+		pending_new_recipe = ""
+	else:
+		current_recipe_id = recipe_pool[recipe_rotation % recipe_pool.size()]
+		recipe_rotation += 1
+	customer.set_order(preload("res://recipes.gd").get_recipe(current_recipe_id))
+
 
 func _customer_step(delta: float) -> void:
 	if customer == null or editing:
@@ -214,6 +259,16 @@ func _customer_step(delta: float) -> void:
 			_spawn_customer()
 	elif customer_state in ["entering", "to_display", "leaving"]:
 		if not customer_route.is_empty():
+			var next_cell: Vector2i = customer_route[0]
+			if next_cell == Vector2i(chef_position.round()) or (walking and not route.is_empty() and next_cell == route[0]):
+				if customer_position.is_equal_approx(customer_position.round()):
+					var destination := customer_entry if customer_state == "leaving" else customer_target
+					var alternative := find_path(Vector2i(customer_position.round()), destination, Vector2i(chef_position.round()))
+					if not alternative.is_empty():
+						customer_route = alternative
+				customer.walking = false
+				return
+			customer.walking = true
 			var target := Vector2(customer_route[0])
 			var direction := project(target) - project(customer_position)
 			if absf(direction.x) > 0.01:
@@ -248,6 +303,8 @@ func pickup_path(start: Vector2i) -> Array[Vector2i]:
 		var goal: Vector2i = cells[1] + direction
 		if not _inside(goal) or goal in cells or goal == Vector2i(chef_position.round()):
 			continue
+		if walking and not route.is_empty() and goal == route.back():
+			continue
 		var path: Array[Vector2i] = [start] if start == goal else find_path(start, goal, Vector2i(chef_position.round()))
 		if path.is_empty():
 			continue
@@ -260,6 +317,9 @@ func pickup_path(start: Vector2i) -> Array[Vector2i]:
 	return []
 
 func _spawn_customer() -> void:
+	if walking:
+		customer_delay = 0.4
+		return
 	# Plan both stages before admitting a visitor: register, then display.
 	for direction in [Vector2i.DOWN, Vector2i.RIGHT, Vector2i.UP, Vector2i.LEFT]:
 		var goal: Vector2i = cells[3] + direction
@@ -280,6 +340,7 @@ func _spawn_customer() -> void:
 			customer_entry = entry
 			customer_position = Vector2(entry)
 			customer_route = path
+			_choose_recipe()
 			customer.visible = true
 			customer.waiting = false
 			customer.paid = false
@@ -353,3 +414,14 @@ func _free_register_cell(occupied: Array[Vector2i]) -> Vector2i:
 			if cell not in occupied and cell != Vector2i(chef_position.round()):
 				return cell
 	return Vector2i.ZERO
+
+func update_display_stock(count: int, capacity: int) -> void:
+	if display_badge == null:
+		return
+	display_badge.text = "%d / %d шт." % [count, capacity]
+	display_badge.reset_size()
+	_position_badge()
+
+func _position_badge() -> void:
+	if display_badge != null:
+		display_badge.position = project(Vector2(cells[1]) + Vector2(0.5, 0.5)) - Vector2(display_badge.size.x * 0.5, unit * 2.5)
