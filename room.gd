@@ -5,16 +5,28 @@ signal register_pressed
 signal display_pressed
 signal layout_changed
 signal hint_changed(message: String)
+const Equipment = preload("res://equipment_catalog.gd")
 const CELLS := 6
 const FLOOR_SLOPE := 0.5
-const TITLES := ["Печь", "Витрина", "Стол с миксером", "Касса"]
-var cells: Array[Vector2i] = [Vector2i(1, 1), Vector2i(3, 3), Vector2i(4, 1), Vector2i(4, 3)]
+const TITLES := ["Печь", "Витрина", "Стол с миксером", "Касса", "Формовочный стол", "Стол декора"]
+var cells: Array[Vector2i] = [Vector2i(1, 1), Vector2i(3, 3), Vector2i(4, 1), Vector2i(4, 3), Vector2i(1,3), Vector2i(2,1)]
+var owned_equipment: Array[String] = ["register"]
 var editing := false
 var selected := -1
 var objects: Array[Node2D] = []
 var unit := 48.0
 var origin := Vector2.ZERO
 var display_badge: Label
+var play_area := Rect2()
+var wide_camera := false
+var overview := false
+var pan_offset := Vector2.ZERO
+var camera_focus_y := 2.0
+var camera_initialized := false
+var pointer_down := false
+var pointer_travel := Vector2.ZERO
+var dragged := false
+var interaction_blocked := false
 
 func _ready() -> void:
 	clip_contents = true
@@ -36,6 +48,17 @@ func _ready() -> void:
 	register.pressed.connect(_select.bind(3))
 	add_child(register)
 	objects.append(register)
+	var workstations: Texture2D = preload("res://assets/workstations.png")
+	for i in range(2):
+		var atlas := AtlasTexture.new()
+		atlas.atlas = workstations
+		atlas.region = Rect2(i * workstations.get_width() / 2.0, 0, workstations.get_width() / 2.0, workstations.get_height())
+		var station := preload("res://equipment.gd").new()
+		station.name = ["FormingTable", "DecoratingTable"][i]
+		station.setup(atlas, i+4, TITLES[i+4])
+		station.pressed.connect(_select.bind(i+4))
+		add_child(station)
+		objects.append(station)
 	chef = preload("res://chef.gd").new()
 	chef.name = "PastryChef"
 	add_child(chef)
@@ -63,9 +86,19 @@ func project(cell: Vector2) -> Vector2:
 	return origin + Vector2((cell.x - cell.y) * unit, (cell.x + cell.y) * unit * FLOOR_SLOPE)
 
 func _arrange() -> void:
-	unit = minf(size.x / 13.5, size.y / 10.0)
-	origin = Vector2(size.x * 0.5, (size.y - 6.0 * unit) * 0.5 + unit)
+	if size.x < 1 or size.y < 1:
+		return
+	var area := play_area if play_area.has_area() else Rect2(Vector2.ZERO, size)
+	if wide_camera and not overview:
+		unit = size.x / 12.4
+	else:
+		unit = minf(size.x / 13.2, area.size.y / 8.8)
+	pan_offset.x = clampf(pan_offset.x, -unit * 4, unit * 4)
+	pan_offset.y = clampf(pan_offset.y, -unit * 5, unit * 5)
+	var focus := camera_focus_y if wide_camera and not overview else 2.0
+	origin = Vector2(size.x * 0.5, area.get_center().y - focus * unit) + pan_offset
 	for i in range(objects.size()):
+		objects[i].visible = is_owned(i)
 		objects[i].fit_to_grid(project(Vector2(cells[i]) + Vector2(0.5, 0.5)), unit, FLOOR_SLOPE)
 		objects[i].z_index = cells[i].x + cells[i].y + 1
 		objects[i].modulate = Color("c7e6b3") if selected == i else Color.WHITE
@@ -100,6 +133,8 @@ func set_editing(value: bool) -> void:
 	_arrange()
 
 func _select(index: int) -> void:
+	if dragged or not is_owned(index):
+		return
 	if editing:
 		selected = index
 		_arrange()
@@ -112,15 +147,15 @@ func _select(index: int) -> void:
 		oven_pressed.emit()
 
 func _gui_input(event: InputEvent) -> void:
-	if not editing or selected < 0:
+	if not editing or selected < 0 or dragged:
 		return
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+	if event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var offset: Vector2 = event.position - origin
 		var cell := Vector2i(floori((offset.x / unit + offset.y / (unit * FLOOR_SLOPE)) * 0.5), floori((offset.y / (unit * FLOOR_SLOPE) - offset.x / unit) * 0.5))
 		if cell.x < 0 or cell.y < 0 or cell.x >= CELLS or cell.y >= CELLS:
 			return
 		for i in range(cells.size()):
-			if i != selected and cells[i] == cell:
+			if i != selected and is_owned(i) and cells[i] == cell:
 				hint_changed.emit("Эта клетка занята. Выбери другую.")
 				return
 		if cell == Vector2i(chef_position.round()):
@@ -182,19 +217,21 @@ func find_path(start: Vector2i, goal: Vector2i, blocked := Vector2i(-99, -99)) -
 			return path
 		for direction in [Vector2i.DOWN, Vector2i.RIGHT, Vector2i.UP, Vector2i.LEFT]:
 			var next: Vector2i = current + direction
-			if next.x < 0 or next.y < 0 or next.x >= CELLS or next.y >= CELLS or next in cells or next == blocked or previous.has(next):
+			if next.x < 0 or next.y < 0 or next.x >= CELLS or next.y >= CELLS or is_occupied(next) or next == blocked or previous.has(next):
 				continue
 			previous[next] = current
 			frontier.append(next)
 	return []
 
 func station_path(index: int, start: Vector2i) -> Array[Vector2i]:
+	if not is_owned(index):
+		return []
 	var best: Array[Vector2i] = []
 	for direction in [Vector2i.DOWN, Vector2i.RIGHT, Vector2i.UP, Vector2i.LEFT]:
 		var goal: Vector2i = cells[index] + direction
 		if customer_state != "absent" and goal == customer_target:
 			continue
-		if goal in cells or goal.x < 0 or goal.y < 0 or goal.x >= CELLS or goal.y >= CELLS:
+		if is_occupied(goal) or goal.x < 0 or goal.y < 0 or goal.x >= CELLS or goal.y >= CELLS:
 			continue
 		if goal == start:
 			return [start]
@@ -204,9 +241,9 @@ func station_path(index: int, start: Vector2i) -> Array[Vector2i]:
 			best = path
 	return best
 
-func can_complete_order() -> bool:
+func can_complete_order(stations: Array = [2,0,1]) -> bool:
 	var start := Vector2i(chef_position.round())
-	for station in [2, 0, 1]:
+	for station in stations:
 		var path := station_path(station, start)
 		if path.is_empty():
 			return false
@@ -239,6 +276,8 @@ func set_recipe_pool(ids: Array[String]) -> void:
 		if id not in recipe_pool:
 			pending_new_recipe = id
 	recipe_pool = ids.duplicate()
+	if recipe_pool.is_empty():
+		pause_customers()
 
 func _choose_recipe() -> void:
 	if not pending_new_recipe.is_empty() and pending_new_recipe in recipe_pool:
@@ -301,7 +340,7 @@ func _inside(cell: Vector2i) -> bool:
 func pickup_path(start: Vector2i) -> Array[Vector2i]:
 	for direction in [Vector2i.DOWN, Vector2i.RIGHT, Vector2i.UP, Vector2i.LEFT]:
 		var goal: Vector2i = cells[1] + direction
-		if not _inside(goal) or goal in cells or goal == Vector2i(chef_position.round()):
+		if not _inside(goal) or is_occupied(goal) or goal == Vector2i(chef_position.round()):
 			continue
 		if walking and not route.is_empty() and goal == route.back():
 			continue
@@ -317,17 +356,19 @@ func pickup_path(start: Vector2i) -> Array[Vector2i]:
 	return []
 
 func _spawn_customer() -> void:
+	if recipe_pool.is_empty() or not is_owned(1) or not is_owned(3):
+		return
 	if walking:
 		customer_delay = 0.4
 		return
 	# Plan both stages before admitting a visitor: register, then display.
 	for direction in [Vector2i.DOWN, Vector2i.RIGHT, Vector2i.UP, Vector2i.LEFT]:
 		var goal: Vector2i = cells[3] + direction
-		if not _inside(goal) or goal in cells or goal == Vector2i(chef_position.round()):
+		if not _inside(goal) or is_occupied(goal) or goal == Vector2i(chef_position.round()):
 			continue
 		for edge in range(CELLS - 1, -1, -1):
 			var entry := Vector2i(edge, CELLS - 1)
-			if entry in cells or entry == goal or entry == Vector2i(chef_position.round()):
+			if is_occupied(entry) or entry == goal or entry == Vector2i(chef_position.round()):
 				continue
 			var path := find_path(entry, goal, Vector2i(chef_position.round()))
 			if path.is_empty():
@@ -389,16 +430,16 @@ func restore_layout(data: ConfigFile) -> void:
 	var loaded: Array[Vector2i] = []
 	for i in range(cells.size()):
 		var cell = data.get_value("layout", str(i), cells[i])
-		if i == 3 and (not data.has_section_key("layout", "3") or cell in loaded):
+		if i >= 3 and (not data.has_section_key("layout", str(i)) or cell in loaded):
 			cell = _free_register_cell(loaded)
 		if not cell is Vector2i or not _inside(cell) or cell in loaded:
 			return
 		loaded.append(cell)
 	cells = loaded
-	if Vector2i(chef_position) in cells:
+	if is_occupied(Vector2i(chef_position)):
 		for x in range(CELLS):
 			for y in range(CELLS):
-				if Vector2i(x, y) not in cells:
+				if not is_occupied(Vector2i(x, y)):
 					chef_position = Vector2(x, y)
 					_arrange()
 					return
@@ -418,6 +459,7 @@ func _free_register_cell(occupied: Array[Vector2i]) -> Vector2i:
 func update_display_stock(count: int, capacity: int) -> void:
 	if display_badge == null:
 		return
+	display_badge.visible = is_owned(1)
 	display_badge.text = "%d / %d шт." % [count, capacity]
 	display_badge.reset_size()
 	_position_badge()
@@ -425,3 +467,76 @@ func update_display_stock(count: int, capacity: int) -> void:
 func _position_badge() -> void:
 	if display_badge != null:
 		display_badge.position = project(Vector2(cells[1]) + Vector2(0.5, 0.5)) - Vector2(display_badge.size.x * 0.5, unit * 2.5)
+
+func set_viewport_layout(area: Rect2, wide: bool) -> void:
+	if not camera_initialized or wide_camera != wide:
+		pan_offset = Vector2.ZERO
+		var minimum := INF
+		var maximum := -INF
+		for i in range(cells.size()):
+			if not is_owned(i):
+				continue
+			var cell := cells[i]
+			var ground_y := (cell.x + cell.y + 1) * FLOOR_SLOPE
+			minimum = minf(minimum, ground_y - 2.2)
+			maximum = maxf(maximum, ground_y + 0.4)
+		camera_focus_y = (minimum + maximum) * 0.5
+		camera_initialized = true
+	play_area = area
+	wide_camera = wide
+	_arrange()
+
+func toggle_overview() -> void:
+	overview = not overview
+	pan_offset = Vector2.ZERO
+	_arrange()
+
+func _input(event: InputEvent) -> void:
+	if interaction_blocked:
+		pointer_down = false
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			pointer_down = play_area.has_point(get_global_transform().affine_inverse() * event.position)
+			pointer_travel = Vector2.ZERO
+			dragged = false
+		else:
+			pointer_down = false
+	elif event is InputEventMouseMotion and pointer_down:
+		pointer_travel += event.relative
+		if pointer_travel.length() > 8:
+			dragged = true
+			pan_offset += event.relative
+			_arrange()
+			get_viewport().set_input_as_handled()
+
+func is_owned(index: int) -> bool:
+	return index >= 0 and index < Equipment.IDS.size() and Equipment.IDS[index] in owned_equipment
+
+func is_occupied(cell: Vector2i) -> bool:
+	for i in range(cells.size()):
+		if is_owned(i) and cells[i] == cell:
+			return true
+	return false
+
+func apply_purchases(ids: Array[String]) -> void:
+	owned_equipment = ids.duplicate()
+	for i in range(objects.size()):
+		objects[i].visible = is_owned(i)
+	display_badge.visible = is_owned(1)
+	camera_initialized = false
+	_arrange()
+
+func prepare_purchase(index: int) -> bool:
+	var candidates: Array[Vector2i] = [cells[index]]
+	for x in range(CELLS):
+		for y in range(CELLS):
+			candidates.append(Vector2i(x,y))
+	for cell in candidates:
+		if is_occupied(cell) or cell == Vector2i(chef_position.round()):
+			continue
+		if customer_state != "absent" and (cell == Vector2i(customer_position.round()) or cell == customer_target or cell in customer_route):
+			continue
+		cells[index] = cell
+		return true
+	return false
