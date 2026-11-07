@@ -3,10 +3,10 @@ extends Node2D
 signal pressed
 # Measured top-plane edge directions in the source atlas, one pair per object.
 # Correct the small camera deviations in generated art to the room's exact axes.
-const FRONT_EDGES := [Vector2(286, 134), Vector2(331, 189), Vector2(322, 193), Vector2(471, 240), Vector2(397,262), Vector2(391,258)]
-const SIDE_EDGES := [Vector2(228, -143), Vector2(206, -132), Vector2(209, -154), Vector2(375, -221), Vector2(353,-252), Vector2(359,-258)]
-const GROUND_ANCHORS := [Vector2(365, 550), Vector2(365, 550), Vector2(365, 550), Vector2(620, 940), Vector2(450,660), Vector2(450,660)]
-const SOURCE_WIDTHS := [540.0, 540.0, 540.0, 850.0, 750.0, 750.0]
+const FRONT_EDGES := [Vector2(286, 134), Vector2(370,215), Vector2(322, 193), Vector2(471, 240), Vector2(397,262), Vector2(391,258), Vector2(305,143)]
+const SIDE_EDGES := [Vector2(228, -143), Vector2(252,-160), Vector2(209, -154), Vector2(375, -221), Vector2(353,-252), Vector2(359,-258), Vector2(247,-149)]
+const GROUND_ANCHORS := [Vector2(365, 550), Vector2(455,695), Vector2(365, 550), Vector2(620, 940), Vector2(450,660), Vector2(450,660), Vector2(450,670)]
+const SOURCE_WIDTHS := [540.0, 650.0, 540.0, 850.0, 750.0, 750.0, 560.0]
 var item_index := 0
 var button: TextureButton
 

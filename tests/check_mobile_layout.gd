@@ -15,6 +15,11 @@ func check() -> void:
 	assert(game.top_panel.position.y + game.top_panel.size.y < game.bottom_panel.position.y)
 	assert(game.bottom_panel.position.y + game.bottom_panel.size.y <= game.get_viewport_rect().size.y)
 	assert(game.recipe_selector.get_global_rect().end.x <= game.get_viewport_rect().size.x)
+	game.room.show_work_status(0,"Выпечка · 5 сек.",0.5)
+	var marker: Control=game.room.work_markers[0]
+	assert(marker.position.y>=game.room.play_area.position.y)
+	assert(marker.get_rect().end.x<=game.room.play_area.end.x)
+	game.room.clear_work_status(0)
 	var before: Vector2 = game.room.origin
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT

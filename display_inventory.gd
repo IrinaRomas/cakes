@@ -1,8 +1,8 @@
 extends RefCounted
 
 const CAPACITY := 18
-const IDS := ["croissant", "cookie", "cupcake"]
-var stock := {"croissant": 0, "cookie": 0, "cupcake": 0}
+const IDS := ["croissant", "cookie", "cupcake", "mousse"]
+var stock := {"croissant": 0, "cookie": 0, "cupcake": 0, "mousse": 0}
 var reserved_id := ""
 var reserved_count := 0
 

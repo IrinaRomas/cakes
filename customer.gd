@@ -1,5 +1,6 @@
 extends "res://chef.gd"
 
+var wait_seconds := -1
 var waiting := false
 var paid := false
 var bubble: Label
@@ -29,6 +30,7 @@ func _process(delta: float) -> void:
 	super._process(delta)
 	bubble.visible = waiting or paid
 	bubble.text = "+%d монет · +%d опыта" % [order_price, order_xp] if paid else "%s × 1" % order_title
+	if waiting and wait_seconds >= 0: bubble.text += " · %d сек." % wait_seconds
 	bubble.size = Vector2.ZERO
 	bubble.position = Vector2(-bubble.size.x * 0.5, -unit * 2.35)
 

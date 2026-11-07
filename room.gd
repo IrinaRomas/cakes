@@ -8,8 +8,8 @@ signal hint_changed(message: String)
 const Equipment = preload("res://equipment_catalog.gd")
 const CELLS := 6
 const FLOOR_SLOPE := 0.5
-const TITLES := ["Печь", "Витрина", "Стол с миксером", "Касса", "Формовочный стол", "Стол декора"]
-var cells: Array[Vector2i] = [Vector2i(1, 1), Vector2i(3, 3), Vector2i(4, 1), Vector2i(4, 3), Vector2i(1,3), Vector2i(2,1)]
+const TITLES := ["Печь", "Витрина", "Стол с миксером", "Касса", "Формовочный стол", "Стол декора", "Холодильник"]
+var cells: Array[Vector2i] = [Vector2i(1, 1), Vector2i(3, 3), Vector2i(4, 1), Vector2i(4, 3), Vector2i(1,3), Vector2i(2,1),Vector2i(5,1)]
 var owned_equipment: Array[String] = ["register"]
 var editing := false
 var selected := -1
@@ -27,6 +27,10 @@ var pointer_down := false
 var pointer_travel := Vector2.ZERO
 var dragged := false
 var interaction_blocked := false
+var stock_visual: Node2D
+var work_markers: Array[Control]=[]
+var work_labels: Array[Label]=[]
+var work_meters: Array[ProgressBar]=[]
 
 func _ready() -> void:
 	clip_contents = true
@@ -36,6 +40,9 @@ func _ready() -> void:
 		var atlas := AtlasTexture.new()
 		atlas.atlas = sheet
 		atlas.region = Rect2(i * sheet.get_width() / 3.0, 0, sheet.get_width() / 3.0, sheet.get_height())
+		if i==1:
+			atlas.atlas=preload("res://assets/cold_display.png")
+			atlas.region=Rect2(0,0,atlas.atlas.get_width()/2.0,atlas.atlas.get_height())
 		var item := preload("res://equipment.gd").new()
 		item.name = ["Oven", "Display", "MixerTable"][i]
 		item.setup(atlas, i, TITLES[i])
@@ -59,6 +66,19 @@ func _ready() -> void:
 		station.pressed.connect(_select.bind(i+4))
 		add_child(station)
 		objects.append(station)
+	var cold: Texture2D=preload("res://assets/cold_display.png")
+	var fridge_atlas:=AtlasTexture.new()
+	fridge_atlas.atlas=cold
+	fridge_atlas.region=Rect2(cold.get_width()/2.0,0,cold.get_width()/2.0,cold.get_height())
+	var fridge:=preload("res://equipment.gd").new()
+	fridge.name="Fridge"
+	fridge.setup(fridge_atlas,6,TITLES[6])
+	fridge.pressed.connect(_select.bind(6))
+	add_child(fridge)
+	objects.append(fridge)
+	stock_visual=preload("res://display_contents.gd").new()
+	objects[1].add_child(stock_visual)
+	_create_work_markers()
 	chef = preload("res://chef.gd").new()
 	chef.name = "PastryChef"
 	add_child(chef)
@@ -104,6 +124,7 @@ func _arrange() -> void:
 		objects[i].modulate = Color("c7e6b3") if selected == i else Color.WHITE
 	_update_chef()
 	_position_badge()
+	_position_work_markers()
 	queue_redraw()
 
 func _draw() -> void:
@@ -406,12 +427,12 @@ func accept_customer_order() -> bool:
 	customer_changed.emit()
 	return true
 
-func finish_customer() -> void:
+func finish_customer(paid: bool = true) -> void:
 	if customer_state != "waiting":
 		return
 	customer_state = "leaving"
 	customer.waiting = false
-	customer.paid = true
+	customer.paid = paid
 	customer.walking = true
 	customer_route = find_path(Vector2i(customer_position.round()), customer_entry, Vector2i(chef_position.round()))
 	if customer_route.is_empty():
@@ -466,7 +487,7 @@ func update_display_stock(count: int, capacity: int) -> void:
 
 func _position_badge() -> void:
 	if display_badge != null:
-		display_badge.position = project(Vector2(cells[1]) + Vector2(0.5, 0.5)) - Vector2(display_badge.size.x * 0.5, unit * 2.5)
+		display_badge.position = project(Vector2(cells[1]) + Vector2(0.5, 0.5)) - Vector2(display_badge.size.x * 0.5, unit * 1.25)
 
 func set_viewport_layout(area: Rect2, wide: bool) -> void:
 	if not camera_initialized or wide_camera != wide:
@@ -540,3 +561,57 @@ func prepare_purchase(index: int) -> bool:
 		cells[index] = cell
 		return true
 	return false
+
+func update_display_inventory(stock: Dictionary, capacity: int) -> void:
+	var total:=0
+	for count in stock.values(): total+=int(count)
+	update_display_stock(total,capacity)
+	stock_visual.set_stock(stock)
+
+func _create_work_markers() -> void:
+	for i in range(objects.size()):
+		var marker:=PanelContainer.new()
+		marker.mouse_filter=Control.MOUSE_FILTER_IGNORE
+		marker.z_index=95
+		var style:=StyleBoxFlat.new()
+		style.bg_color=Color("fff9ed")
+		style.set_corner_radius_all(7)
+		style.set_content_margin_all(5)
+		marker.add_theme_stylebox_override("panel",style)
+		var box:=VBoxContainer.new()
+		box.mouse_filter=Control.MOUSE_FILTER_IGNORE
+		marker.add_child(box)
+		var label:=Label.new()
+		label.add_theme_font_size_override("font_size",13)
+		label.add_theme_color_override("font_color",Color("344b3f"))
+		box.add_child(label)
+		var meter:=ProgressBar.new()
+		meter.custom_minimum_size=Vector2(110,7)
+		meter.mouse_filter=Control.MOUSE_FILTER_IGNORE
+		meter.max_value=1
+		meter.show_percentage=false
+		box.add_child(meter)
+		add_child(marker)
+		marker.hide()
+		work_markers.append(marker)
+		work_labels.append(label)
+		work_meters.append(meter)
+
+func show_work_status(index: int, text: String, fraction: float) -> void:
+	if index<0 or index>=work_markers.size(): return
+	work_labels[index].text=text
+	work_meters[index].value=fraction
+	work_markers[index].visible=is_owned(index)
+	_position_work_markers()
+
+func clear_work_status(index: int) -> void:
+	if index>=0 and index<work_markers.size(): work_markers[index].hide()
+
+func _position_work_markers() -> void:
+	for i in range(work_markers.size()):
+		work_markers[i].reset_size()
+		var at:=project(Vector2(cells[i])+Vector2(0.5,0.5))-Vector2(work_markers[i].size.x/2,unit*1.8)
+		var area:=play_area if play_area.has_area() else Rect2(Vector2.ZERO,size)
+		at.x=clampf(at.x,area.position.x+4,maxf(area.position.x+4,area.end.x-work_markers[i].size.x-4))
+		at.y=clampf(at.y,area.position.y+4,maxf(area.position.y+4,area.end.y-work_markers[i].size.y-4))
+		work_markers[i].position=at

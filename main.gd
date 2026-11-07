@@ -14,8 +14,20 @@ var remaining := 0.0
 var busy := false
 var taking_order := false
 var production_phase := ""
+const CUSTOMER_WAIT_SECONDS := 30.0
+var customer_wait_remaining := CUSTOMER_WAIT_SECONDS
 var order_retry := 0.0
+var job_queue=preload("res://production_queue.gd").new()
+var queue_button: Button
+var queue_panel: Control
+var queue_reason := ""
+var active_step: Dictionary={}
+var stage_index := 0
+var stage_has_started := false
+var stage_history: Array[int]=[]
 signal order_service_finished
+signal batch_completed(recipe_id: String)
+signal stage_started(recipe_id: String, phase: String, station: int)
 var stage_text := ""
 var inventory = preload("res://display_inventory.gd").new()
 var pending_resume := ""
@@ -160,6 +172,17 @@ func _ready() -> void:
 	progress.show_percentage = false
 	progress.custom_minimum_size.y = 8
 	controls_box.add_child(progress)
+	queue_button=Button.new()
+	queue_button.text="Очередь · 0"
+	queue_button.z_index=201
+	queue_button.custom_minimum_size=Vector2(150,44)
+	queue_button.pressed.connect(_open_queue)
+	add_child(queue_button)
+	queue_panel=preload("res://production_panel.gd").new()
+	add_child(queue_panel)
+	queue_panel.visibility_changed.connect(_sync_room_input)
+	queue_panel.move_requested.connect(_move_job)
+	queue_panel.cancel_requested.connect(_cancel_job)
 	center_camera = Button.new()
 	center_camera.z_index = 201
 	center_camera.text = "Весь зал"
@@ -179,8 +202,6 @@ func _ready() -> void:
 		_save_progress()
 		call_deferred("_open_shop")
 	_queue_layout()
-	if not pending_resume.is_empty():
-		call_deferred("_start_batch", pending_resume)
 
 func _hud_style(color: String) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -226,20 +247,29 @@ func _arrange_screen() -> void:
 	top_panel.size = Vector2(width, top_panel.get_combined_minimum_size().y)
 	bottom_panel.size = Vector2(width, bottom_panel.get_combined_minimum_size().y)
 	bottom_panel.position = Vector2(padding.x, viewport.y - padding.w - bottom_panel.size.y)
+	queue_button.position=Vector2(padding.x,bottom_panel.position.y-54)
 	center_camera.position = Vector2(viewport.x - padding.z - center_camera.size.x, bottom_panel.position.y - 54)
 	room.set_viewport_layout(Rect2(Vector2(padding.x, top_panel.position.y + top_panel.size.y + 8), Vector2(width, maxf(140, bottom_panel.position.y - top_panel.position.y - top_panel.size.y - 16))), wide)
 	_refresh_stock()
 
 func _process(delta: float) -> void:
-	order_retry = maxf(0.0, order_retry-delta)
+	order_retry=maxf(0.0,order_retry-delta)
 	_try_take_order()
-	if notice_remaining > 0.0:
-		notice_remaining = maxf(0.0, notice_remaining - delta)
-		unlock_notice.visible = notice_remaining > 0.0
-	if remaining > 0.0:
-		remaining = maxf(0.0, remaining - delta)
-		progress.value = float(active_recipe.bake) - remaining
-		status_label.text = "%s × %d · выпечка · %d сек." % [active_recipe.title, active_recipe.batch, ceili(remaining)]
+	_dispatch_queue()
+	_update_customer_wait(delta)
+	if not busy and not taking_order and not queue_reason.is_empty():
+		status_label.text=queue_reason + " · освободи место через «Рецепты» или дождись продаж"
+	if notice_remaining>0:
+		notice_remaining=maxf(0.0,notice_remaining-delta)
+		unlock_notice.visible=notice_remaining>0
+	if remaining>0 and not active_step.is_empty():
+		remaining=maxf(0.0,remaining-delta)
+		progress.value=float(active_step.duration)-remaining
+		room.show_work_status(active_step.station, "%s · %d сек." % [active_step.title,ceili(remaining)], _stage_fraction())
+		if not taking_order:
+			status_label.text="%s × %d · %s · %d сек." % [active_recipe.title,active_recipe.batch,active_step.title,ceili(remaining)]
+	if queue_panel.visible:
+		queue_panel.update_current(_production_summary(),_stage_fraction())
 
 func _selected_id() -> String:
 	return selectable_ids[recipe_selector.selected] if recipe_selector.selected >= 0 and recipe_selector.selected < selectable_ids.size() else "croissant"
@@ -254,76 +284,123 @@ func _bake_selected() -> void:
 	_start_batch(_selected_id())
 
 func _start_batch(id: String) -> void:
-	if busy or taking_order or room.editing or id not in Catalog.unlocked_ids(experience):
-		return
-	if not pending_resume.is_empty() and id != pending_resume:
-		status_label.text = "Сначала заверши сохранённую партию."
-		return
-	var recipe: Dictionary = Catalog.get_recipe(id)
-	var missing := Equipment.missing_titles(recipe, purchased)
+	if room.editing or id not in Catalog.unlocked_ids(experience): return
+	var recipe: Dictionary=Catalog.get_recipe(id)
+	var missing:=Equipment.missing_titles(recipe,purchased)
 	if not missing.is_empty():
-		_open_shop("Для рецепта нужно: " + missing)
+		_open_shop("Для рецепта нужно: "+missing)
 		return
-	if not inventory.can_fit(recipe.batch):
-		status_label.text = "Для партии нужно %d мест. Свободно: %d." % [recipe.batch, inventory.free_space()]
+	if job_queue.enqueue(id)<0:
+		status_label.text="В очереди уже пять партий. Заверши или отмени одну."
 		return
-	if not room.can_complete_order(recipe.stations):
-		status_label.text = "Нет прохода к оборудованию. Измени расстановку."
-		return
-	if not inventory.reserve(id, recipe.batch):
-		return
-	pending_resume = ""
-	active_recipe = recipe.duplicate()
-	progress.max_value = active_recipe.bake
-	progress.value = 0
-	room.chef.carried_recipe = active_recipe.id
-	room.chef.carried_count = active_recipe.batch
-	busy = true
-	production_phase = "preparing"
-	room.busy = true
-	layout_button.disabled = true
 	_save_progress()
-	_refresh()
-	await _visit(2, "Партия %d шт. · кондитер идёт к миксеру" % active_recipe.batch)
-	stage_text = "%s × %d · готовим тесто…" % [active_recipe.title, active_recipe.batch]
-	status_label.text = stage_text
-	room.chef.working = true
-	await get_tree().create_timer(float(active_recipe.prep)).timeout
-	room.chef.working = false
-	room.chef.carrying = true
-	room.chef.carrying_dough = true
-	if active_recipe.id == "cookie":
-		await _visit(4, "Формуем печенье на формовочном столе")
-		room.chef.working = true
-		await get_tree().create_timer(1.0).timeout
-		room.chef.working = false
-	await _visit(0, "Переносим партию заготовок в печь")
-	room.chef.carrying = false
-	room.chef.carrying_dough = false
-	production_phase = "baking"
-	remaining = active_recipe.bake
-	await get_tree().create_timer(float(active_recipe.bake)).timeout
-	remaining = 0.0
-	production_phase = "finishing"
-	if taking_order:
-		await order_service_finished
-	await _visit(0, "Забираем готовую партию из печи")
-	room.chef.carrying = true
-	if active_recipe.id == "cupcake":
-		await _visit(5, "Украшаем капкейки на столе декора")
-		room.chef.working = true
-		await get_tree().create_timer(2.0).timeout
-		room.chef.working = false
-	await _visit(1, "%s × %d · пополняем витрину" % [active_recipe.title, active_recipe.batch])
-	room.chef.carrying = false
+	_queue_changed()
+	_dispatch_queue()
+
+func _dispatch_queue() -> void:
+	if busy or taking_order or room.editing or job_queue.waiting.is_empty(): return
+	var recipe: Dictionary=Catalog.get_recipe(job_queue.waiting[0].recipe)
+	var reason:=""
+	if recipe.id not in Catalog.unlocked_ids(experience):
+		reason="Первый рецепт пока не открыт"
+	elif not Equipment.missing(recipe,purchased).is_empty():
+		reason="Нужно купить: "+Equipment.missing_titles(recipe,purchased)
+	elif not inventory.can_fit(recipe.batch):
+		reason="Первая партия ждёт %d мест в витрине · свободно %d" % [recipe.batch,inventory.free_space()]
+	elif not room.can_complete_order(recipe.stations):
+		reason="Нет прохода к оборудованию первой партии"
+	if queue_reason!=reason:
+		queue_reason=reason
+		_queue_changed()
+	if not reason.is_empty(): return
+	if not inventory.reserve(recipe.id,recipe.batch): return
+	job_queue.begin_next()
+	_run_batch(recipe)
+
+func _run_batch(recipe: Dictionary) -> void:
+	active_recipe=recipe.duplicate()
+	room.chef.carried_recipe=recipe.id
+	room.chef.carried_count=recipe.batch
+	room.chef.carrying=false
+	busy=true
+	room.busy=true
+	layout_button.disabled=true
+	_save_progress()
+	_queue_changed()
+	var steps: Array[Dictionary]=Catalog.steps(recipe.id)
+	stage_history.clear()
+	for index in range(steps.size()):
+		stage_index=index
+		active_step=steps[index]
+		stage_has_started=false
+		production_phase=active_step.key
+		remaining=0
+		progress.max_value=active_step.duration
+		progress.value=0
+		await _visit(active_step.station,"%s × %d · %s" % [recipe.title,recipe.batch,active_step.title])
+		stage_history.append(active_step.station)
+		if active_step.passive:
+			room.chef.carrying=false
+			room.chef.carrying_dough=false
+		room.chef.working=not active_step.passive
+		remaining=active_step.duration
+		stage_has_started=true
+		room.show_work_status(active_step.station,active_step.title,0)
+		stage_started.emit(recipe.id,active_step.key,active_step.station)
+		await get_tree().create_timer(float(active_step.duration)).timeout
+		remaining=0
+		room.chef.working=false
+		if active_step.passive:
+			production_phase="collecting"
+			room.show_work_status(active_step.station,"Готово · ждёт кондитера",1)
+			if taking_order: await order_service_finished
+			await _visit(active_step.station,"Забираем партию · "+active_step.title)
+		room.clear_work_status(active_step.station)
+		room.chef.carrying=true
+		room.chef.carrying_dough=active_step.key in ["preparing","forming"]
+	room.chef.carrying=false
+	room.chef.carrying_dough=false
 	inventory.finish_batch()
-	busy = false
-	production_phase = ""
-	room.busy = false
-	layout_button.disabled = false
+	job_queue.finish()
+	busy=false
+	production_phase=""
+	active_step={}
+	room.busy=false
+	layout_button.disabled=false
 	_save_progress()
 	_serve_customer()
+	_queue_changed()
+	batch_completed.emit(recipe.id)
+
+func _stage_fraction() -> float:
+	if active_step.is_empty() or not stage_has_started: return 0
+	return clampf(1.0-remaining/float(active_step.duration),0,1)
+
+func _production_summary() -> String:
+	if not busy:
+		if job_queue.waiting.is_empty(): return "Кондитер свободен · добавь партии в очередь"
+		var next: Dictionary=Catalog.get_recipe(job_queue.waiting[0].recipe)
+		return "Следующая партия: %s × %d\n%s" % [next.title,next.batch,Catalog.route_title(next.id)]
+	return "%s × %d · этап %d/%d: %s\n%s" % [active_recipe.title,active_recipe.batch,stage_index+1,Catalog.steps(active_recipe.id).size(),active_step.get("title","В пути"),Catalog.route_title(active_recipe.id)]
+
+func _queue_changed() -> void:
+	if job_queue.waiting.is_empty(): queue_reason=""
+	queue_button.text="Очередь · %d%s" % [job_queue.waiting.size()," + 1 в работе" if busy else ""]
 	_refresh()
+	if queue_panel.visible: _open_queue()
+
+func _open_queue() -> void:
+	queue_panel.show_queue(job_queue,_production_summary(),_stage_fraction(),queue_reason)
+
+func _move_job(id: int, direction: int) -> void:
+	if job_queue.move_job(id,direction):
+		_save_progress()
+		_queue_changed()
+
+func _cancel_job(id: int) -> void:
+	if job_queue.cancel(id):
+		_save_progress()
+		_queue_changed()
 
 func _visit(station: int, message: String) -> void:
 	stage_text = message
@@ -381,11 +458,14 @@ func _refresh() -> void:
 	elif room.customer_state == "entering":
 		status_label.text = "Покупатель идёт к кассе…"
 	elif room.customer_state == "leaving":
-		status_label.text = "Продано 1 шт. · %s" % last_reward
+		status_label.text = "Продано 1 шт. · %s" % last_reward if room.customer.paid else "Покупатель ушёл без покупки · ждём следующего"
 	else:
 		status_label.text = "Ждём покупателя · продано изделий: %d" % baked
-	if not busy:
+	if busy and not taking_order:
+		status_label.text=stage_text if remaining<=0 else "%s × %d · %s · %d сек." % [active_recipe.title,active_recipe.batch,active_step.title,ceili(remaining)]
+	elif not busy:
 		progress.value = 0
+		if not queue_reason.is_empty(): status_label.text=queue_reason
 
 func _refresh_stock() -> void:
 	var details := PackedStringArray()
@@ -395,25 +475,21 @@ func _refresh_stock() -> void:
 	stock_label.text = ("Витрина: %d/%d · в работе: %d" % [inventory.total(), inventory.CAPACITY, inventory.reserved_count]) + (" · " if wide_layout else "\n") + " · ".join(details)
 	if "display" not in purchased:
 		stock_label.text = "Витрина ещё не куплена · 18 мест после покупки"
-	room.update_display_stock(inventory.total(), inventory.CAPACITY)
+	room.update_display_inventory(inventory.stock,inventory.CAPACITY)
 	_refresh_batch_button()
 	if recipe_book.visible:
 		_open_recipe_book()
 
 func _refresh_batch_button() -> void:
-	var recipe: Dictionary = Catalog.get_recipe(_selected_id())
-	batch_button.text = "Выпечь %d шт." % recipe.batch
-	var missing := Equipment.missing(recipe, purchased)
-	batch_button.disabled = busy or taking_order or room.editing or not inventory.can_fit(recipe.batch) or not missing.is_empty()
-	if busy or taking_order:
-		batch_button.text = "Кондитер на кассе…" if taking_order else "Партия готовится…"
-	elif not missing.is_empty():
-		batch_button.text = "Нужно оборудование"
-	elif not inventory.can_fit(recipe.batch):
-		batch_button.text = "Мало места · нужно %d" % recipe.batch
+	var recipe: Dictionary=Catalog.get_recipe(_selected_id())
+	var missing:=Equipment.missing(recipe,purchased)
+	batch_button.text="В очередь · %d шт." % recipe.batch
+	batch_button.disabled=room.editing or job_queue.waiting.size()>=job_queue.LIMIT or not missing.is_empty()
+	if not missing.is_empty(): batch_button.text="Нужно оборудование"
+	elif job_queue.waiting.size()>=job_queue.LIMIT: batch_button.text="Очередь заполнена"
 
 func _open_recipe_book() -> void:
-	recipe_book.show_recipes(experience, inventory, busy or taking_order, room.editing, purchased)
+	recipe_book.show_recipes(experience, inventory, busy or taking_order, room.editing, purchased, job_queue.waiting.size()>=job_queue.LIMIT)
 
 func _discard_stock(id: String) -> void:
 	if room.editing or not inventory.take_one(id):
@@ -443,7 +519,7 @@ func _update_level_display() -> void:
 		xp_progress.max_value = target - start
 		xp_progress.value = experience - start
 	else:
-		level_label.text = "Уровень %d · %d опыта · все 3 рецепта открыты" % [level, experience]
+		level_label.text = "Уровень %d · %d опыта · все %d рецепта открыты" % [level, experience,Catalog.RECIPES.size()]
 		xp_progress.max_value = 1
 		xp_progress.value = 1
 
@@ -457,6 +533,7 @@ func _progress_data() -> ConfigFile:
 	data.set_value("business", "version", 1)
 	data.set_value("business", "purchased", PackedStringArray(purchased))
 	inventory.write_save(data)
+	job_queue.write_save(data)
 	if not pending_resume.is_empty():
 		data.set_value("production", "recipe", pending_resume)
 	return data
@@ -488,6 +565,8 @@ func _restore_progress(data: ConfigFile) -> void:
 		room.apply_purchases(purchased)
 	room.restore_layout(data)
 	room.set_recipe_pool(_orderable_recipe_ids())
+	job_queue.restore(data,pending_resume)
+	pending_resume=""
 
 func _load_progress() -> void:
 	var data := ConfigFile.new()
@@ -504,8 +583,6 @@ func _toggle_layout() -> void:
 		status_label.text = "Выбери предмет, затем свободную клетку пола."
 	else:
 		_refresh()
-		if not pending_resume.is_empty():
-			call_deferred("_start_batch", pending_resume)
 
 func _orderable_recipe_ids() -> Array[String]:
 	var ready: Array[String] = []
@@ -563,6 +640,9 @@ func _start_new_game() -> void:
 	experience = 0
 	baked = 0
 	inventory = preload("res://display_inventory.gd").new()
+	job_queue=preload("res://production_queue.gd").new()
+	queue_reason=""
+	active_step={}
 	purchased = ["register"]
 	pending_resume = ""
 	active_recipe = {}
@@ -573,24 +653,24 @@ func _start_new_game() -> void:
 	room.pause_customers()
 	room.set_editing(false)
 	layout_button.text = "Мебель"
-	room.cells.assign([Vector2i(1,1),Vector2i(3,3),Vector2i(4,1),Vector2i(4,3),Vector2i(1,3),Vector2i(2,1)])
+	room.cells.assign([Vector2i(1,1),Vector2i(3,3),Vector2i(4,1),Vector2i(4,3),Vector2i(1,3),Vector2i(2,1),Vector2i(5,1)])
 	room.chef_position = Vector2(2,4)
 	room.current_recipe_id = "croissant"
 	room.pending_new_recipe = ""
 	room.recipe_rotation = 0
 	room.apply_purchases(purchased)
 	_save_progress()
-	_refresh()
+	_queue_changed()
 	_queue_layout()
 	_open_shop()
 
 func _sync_room_input() -> void:
-	room.interaction_blocked = (equipment_shop != null and equipment_shop.visible) or (recipe_book != null and recipe_book.visible) or (new_game_dialog != null and new_game_dialog.visible)
+	room.interaction_blocked = (equipment_shop != null and equipment_shop.visible) or (recipe_book != null and recipe_book.visible) or (new_game_dialog != null and new_game_dialog.visible) or (queue_panel != null and queue_panel.visible)
 
 func _try_take_order() -> void:
 	if taking_order or room.editing or room.customer_state != "ordering" or order_retry > 0.0:
 		return
-	if busy and (production_phase != "baking" or remaining <= 0.0):
+	if busy and (production_phase not in ["baking","cooling"] or remaining <= 0.0):
 		return
 	if room.station_path(3, Vector2i(room.chef_position.round())).is_empty():
 		order_retry = 1.0
@@ -607,9 +687,11 @@ func _take_order() -> void:
 	if room.walk_to_station(3):
 		await room.arrived
 		room.chef.working = true
+		room.show_work_status(3,"Приём заказа",0)
 		status_label.text = "Кондитер принимает заказ…"
 		await get_tree().create_timer(0.8).timeout
 		room.chef.working = false
+		room.clear_work_status(3)
 		_accept_order()
 	taking_order = false
 	room.busy = busy
@@ -619,3 +701,14 @@ func _take_order() -> void:
 	if equipment_shop.visible:
 		_open_shop()
 	order_service_finished.emit()
+
+func _update_customer_wait(delta: float) -> void:
+	if room.customer_state != "waiting":
+		customer_wait_remaining=CUSTOMER_WAIT_SECONDS
+		room.customer.wait_seconds=-1
+		return
+	if room.editing: return
+	customer_wait_remaining=maxf(0.0,customer_wait_remaining-delta)
+	room.customer.wait_seconds=ceili(customer_wait_remaining)
+	if customer_wait_remaining<=0:
+		room.finish_customer(false)

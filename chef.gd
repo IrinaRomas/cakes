@@ -53,19 +53,14 @@ func _draw() -> void:
 		draw_ellipse_tray(center)
 
 func draw_ellipse_tray(center: Vector2) -> void:
-	draw_style_box(_tray_style(), Rect2(center - Vector2(unit * 0.28, unit * 0.08), Vector2(unit * 0.56, unit * 0.16)))
-	if carrying_dough:
-		draw_circle(center, unit * 0.14, Color("edcf90"))
-	elif carried_recipe == "cookie":
-		draw_circle(center, unit * 0.16, Color("d59b55"))
-		for offset in [Vector2(-0.06,-0.04), Vector2(0.06,-0.06), Vector2(0.02,0.07)]:
-			draw_circle(center + offset * unit, unit * 0.025, Color("694333"))
-	elif carried_recipe == "cupcake":
-		draw_colored_polygon(PackedVector2Array([center+Vector2(-0.16,-0.04)*unit, center+Vector2(0.16,-0.04)*unit, center+Vector2(0.11,0.15)*unit, center+Vector2(-0.11,0.15)*unit]), Color("b97b68"))
-		draw_circle(center + Vector2(0,-0.10)*unit, unit*0.14, Color("f5d3c9"))
-		draw_circle(center + Vector2(0,-0.22)*unit, unit*0.055, Color("cf655b"))
-	else:
-		draw_arc(center, unit * 0.14, 0.2, 2.9, 12, Color("d99c4c"), unit * 0.10, true)
+	draw_style_box(_tray_style(),Rect2(center-Vector2(unit*0.48,unit*0.10),Vector2(unit*0.96,unit*0.23)))
+	var count:=mini(carried_count,8)
+	var columns:=4 if count>6 else 3
+	for i in range(count):
+		var row:=i/columns
+		var column:=i%columns
+		var point:=center+Vector2((column-(columns-1)*0.5)*(0.22 if columns==4 else 0.27),(row-0.5)*0.17-0.07)*unit
+		preload("res://pastry_icons.gd").draw_food(self,carried_recipe,point,unit*0.20,carrying_dough)
 
 func _tray_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
