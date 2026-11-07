@@ -2,6 +2,8 @@ extends "res://modal_panel.gd"
 
 signal production_requested(id: String)
 signal discard_requested(id: String)
+signal auto_restock_changed(enabled: bool)
+var auto_toggle: CheckButton
 signal shop_requested
 const Equipment = preload("res://equipment_catalog.gd")
 const Catalog = preload("res://recipes.gd")
@@ -21,6 +23,13 @@ func _ready() -> void:
 	panel.add_child(margin)
 	var outer:=VBoxContainer.new()
 	margin.add_child(outer)
+	auto_toggle=CheckButton.new()
+	auto_toggle.text="Автопополнение витрины"
+	for color_name in ["font_color","font_pressed_color","font_hover_color","font_hover_pressed_color"]:
+		auto_toggle.add_theme_color_override(color_name,Color("344b3f"))
+	auto_toggle.custom_minimum_size.y=44
+	auto_toggle.toggled.connect(func(enabled: bool): auto_restock_changed.emit(enabled))
+	outer.add_child(auto_toggle)
 	var scroll:=ScrollContainer.new()
 	scroll.custom_minimum_size=Vector2(450,260)
 	scroll.size_flags_vertical=Control.SIZE_EXPAND_FILL
@@ -36,11 +45,14 @@ func _ready() -> void:
 	close.pressed.connect(hide)
 	outer.add_child(close)
 
-func show_recipes(total_xp: int, inventory, busy: bool, editing: bool = false, purchased: Array[String] = [], queue_full: bool = false, quotes: Dictionary={}, income: int=0) -> void:
+func show_recipes(total_xp: int, inventory, busy: bool, editing: bool = false, purchased: Array[String] = [], queue_full: bool = false, quotes: Dictionary={}, income: int=0, automatic: bool=true) -> void:
+	auto_toggle.set_pressed_no_signal(automatic)
+	auto_toggle.text="Автопополнение: "+("включено" if automatic else "пауза")
 	for child in list.get_children():
 		list.remove_child(child)
 		child.queue_free()
 	_add_text(("Витрины" if "display_extra" in purchased else "Витрина") + ": %d / %d · в работе: %d" % [inventory.total(), inventory.capacity, inventory.reserved_count], false, 22)
+	_add_text("Кондитер сам готовит партию, когда изделия этого вида закончились. Учитываются очередь, оборудование и свободное место. Ручные партии имеют приоритет.",true)
 	_add_text("Выручка от продаж: %d монет" % income)
 	var level := Catalog.level_for_xp(total_xp)
 	for base_recipe in Catalog.RECIPES:

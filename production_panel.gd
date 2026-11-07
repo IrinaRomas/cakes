@@ -64,7 +64,7 @@ func show_queue(queue, stage_text: String, fraction: float, reason: String, quot
 		var row:=HBoxContainer.new()
 		list.add_child(row)
 		var label:=Label.new()
-		label.text="%d. %s × %d" % [i+1,recipe.title,recipe.batch]
+		label.text="%d. %s × %d%s" % [i+1,recipe.title,recipe.batch," · авто" if job.get("automatic",false) else ""]
 		label.add_theme_font_size_override("font_size",14)
 		label.text+="\n"+("Подготовлено" if job.get("prepared",false) else ("Помощник готовит" if job.get("preparing",false) else "Ожидает"))
 		label.size_flags_horizontal=Control.SIZE_EXPAND_FILL

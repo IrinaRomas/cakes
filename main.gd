@@ -2,6 +2,8 @@ extends Control
 
 const Catalog = preload("res://recipes.gd")
 const Equipment = preload("res://equipment_catalog.gd")
+var auto_status:=""
+var auto_restock:=true
 var coins := Equipment.STARTING_COINS
 var purchased: Array[String] = ["register"]
 var fresh_game := true
@@ -116,6 +118,7 @@ func _ready() -> void:
 	recipe_book.visibility_changed.connect(_sync_room_input)
 	recipe_book.production_requested.connect(_start_batch)
 	recipe_book.discard_requested.connect(_discard_stock)
+	recipe_book.auto_restock_changed.connect(_set_auto_restock)
 	recipe_book.shop_requested.connect(func(): recipe_book.hide(); _open_shop())
 	layout_button = Button.new()
 	layout_button.text = "Мебель"
@@ -259,12 +262,14 @@ func _arrange_screen() -> void:
 func _process(delta: float) -> void:
 	order_retry=maxf(0.0,order_retry-delta)
 	_try_take_order()
+	_plan_autonomous_batch()
 	_dispatch_queue()
 	_try_prepare_next()
 	if preparing_job_id>=0:
 		preparing_remaining=maxf(0,preparing_remaining-delta)
 		room.show_work_status(8,"Подготовка · %d сек." % ceili(preparing_remaining),1-preparing_remaining/preparing_duration)
 	_update_customer_wait(delta)
+	if not busy and not taking_order and job_queue.waiting.is_empty() and auto_restock and not auto_status.is_empty(): status_label.text=auto_status
 	if not busy and not taking_order and not queue_reason.is_empty():
 		status_label.text=queue_reason + (" · освободи место через «Рецепты» или дождись продаж" if queue_reason.contains("мест") else " · проверь очередь и рецепты")
 	if notice_remaining>0:
@@ -298,9 +303,14 @@ func _start_batch(id: String) -> void:
 	if not missing.is_empty():
 		_open_shop("Для рецепта нужно: "+missing)
 		return
-	if job_queue.enqueue(id)<0:
+	var job_id: int=job_queue.enqueue(id)
+	if job_id<0:
 		status_label.text="В очереди уже пять партий. Заверши или отмени одну."
 		return
+	var index: int=job_queue.waiting.size()-1
+	while index>0 and job_queue.waiting[index-1].get("automatic",false):
+		job_queue.move_job(job_id,-1)
+		index-=1
 	_save_progress()
 	_queue_changed()
 	_dispatch_queue()
@@ -411,11 +421,14 @@ func _queue_changed() -> void:
 	queue_button.text="Очередь · %d%s" % [job_queue.waiting.size()," + 1 в работе" if busy else ""]
 	_refresh()
 	if queue_panel.visible: _open_queue()
+	if equipment_shop.visible: _open_shop()
 
 func _open_queue() -> void:
 	queue_panel.show_queue(job_queue,_production_summary(),_stage_fraction(),queue_reason,_recipe_quotes())
 
 func _move_job(id: int, direction: int) -> void:
+	for job in job_queue.waiting:
+		if int(job.id)==id: job.automatic=false
 	if job_queue.move_job(id,direction):
 		_save_progress()
 		_queue_changed()
@@ -522,7 +535,7 @@ func _refresh_batch_button() -> void:
 	elif job_queue.waiting.size()>=job_queue.LIMIT: batch_button.text="Очередь заполнена"
 
 func _open_recipe_book() -> void:
-	recipe_book.show_recipes(experience, inventory, busy or taking_order, room.editing, purchased, job_queue.waiting.size()>=job_queue.LIMIT,_recipe_quotes(),economy.sales_income)
+	recipe_book.show_recipes(experience, inventory, busy or taking_order, room.editing, purchased, job_queue.waiting.size()>=job_queue.LIMIT,_recipe_quotes(),economy.sales_income,auto_restock)
 
 func _discard_stock(id: String) -> void:
 	if room.editing or not inventory.take_one(id):
@@ -571,6 +584,7 @@ func _progress_data() -> ConfigFile:
 	inventory.write_save(data)
 	job_queue.write_save(data)
 	economy.write_save(data)
+	data.set_value("automation","enabled",auto_restock)
 	if not pending_resume.is_empty():
 		data.set_value("production", "recipe", pending_resume)
 	return data
@@ -581,6 +595,7 @@ func _save_progress() -> void:
 func _restore_progress(data: ConfigFile) -> void:
 	fresh_game = false
 	economy.restore(data)
+	auto_restock=bool(data.get_value("automation","enabled",true))
 	purchased.clear()
 	var saved_purchases = data.get_value("business", "purchased", Equipment.LEGACY)
 	for id in saved_purchases:
@@ -688,6 +703,7 @@ func _start_new_game() -> void:
 		return
 	_backup_progress()
 	coins = Equipment.STARTING_COINS
+	auto_restock=true
 	experience = 0
 	baked = 0
 	inventory = preload("res://display_inventory.gd").new()
@@ -832,3 +848,47 @@ func _job_stations(job: Dictionary, recipe: Dictionary) -> Array[int]:
 	var stations:=_production_stations(recipe)
 	if job.get("prepared",false): stations.push_front(8)
 	return stations
+
+func _set_auto_restock(enabled: bool) -> void:
+	auto_restock=enabled
+	if not enabled:
+		for index in range(job_queue.waiting.size()-1,-1,-1):
+			var job: Dictionary=job_queue.waiting[index]
+			if job.get("automatic",false) and not job.get("prepared",false) and not job.get("preparing",false): job_queue.waiting.remove_at(index)
+	_save_progress()
+	_queue_changed()
+
+func _plan_autonomous_batch() -> void:
+	auto_status=""
+	if not auto_restock or room.editing or job_queue.waiting.size()>=job_queue.LIMIT: return
+	var projected: Dictionary=inventory.stock.duplicate()
+	var available:=inventory.free_space()
+	if inventory.reserved_count>0: projected[inventory.reserved_id]=int(projected.get(inventory.reserved_id,0))+inventory.reserved_count
+	for job in job_queue.waiting:
+		var recipe:=_recipe_for_job(job)
+		projected[recipe.id]=int(projected.get(recipe.id,0))+int(recipe.batch)
+		available-=int(recipe.batch)
+	var candidates: Array[String]=Catalog.unlocked_ids(experience)
+	var requested: String=room.current_recipe_id
+	if room.customer_state in ["ordering","to_display","waiting"] and requested in candidates:
+		candidates.erase(requested)
+		candidates.push_front(requested)
+	for id in candidates:
+		if int(projected.get(id,0))>0: continue
+		var recipe:=_effective_recipe(id)
+		var missing:=Equipment.missing_titles(recipe,purchased)
+		if not missing.is_empty():
+			if auto_status.is_empty(): auto_status="Авто: для %s нужно купить: %s" % [recipe.title,missing]
+			continue
+		if int(recipe.batch)>available:
+			if auto_status.is_empty(): auto_status="Авто: %s ждёт %d мест · свободно %d" % [recipe.title,recipe.batch,maxi(0,available)]
+			continue
+		if not room.can_complete_order(_production_stations(recipe)):
+			if auto_status.is_empty(): auto_status="Авто: освободи проход к оборудованию для %s" % recipe.title
+			continue
+		if job_queue.enqueue(id)<0: return
+		auto_status=""
+		job_queue.waiting.back().automatic=true
+		_save_progress()
+		_queue_changed()
+		return
