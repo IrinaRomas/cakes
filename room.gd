@@ -8,8 +8,8 @@ signal hint_changed(message: String)
 const Equipment = preload("res://equipment_catalog.gd")
 const CELLS := 6
 const FLOOR_SLOPE := 0.5
-const TITLES := ["Печь", "Витрина", "Стол с миксером", "Касса", "Формовочный стол", "Стол декора", "Холодильник"]
-var cells: Array[Vector2i] = [Vector2i(1, 1), Vector2i(3, 3), Vector2i(4, 1), Vector2i(4, 3), Vector2i(1,3), Vector2i(2,1),Vector2i(5,1)]
+const TITLES := ["Печь", "Витрина", "Стол с миксером", "Касса", "Формовочный стол", "Стол декора", "Холодильник", "Витрина", "Место помощника"]
+var cells: Array[Vector2i] = [Vector2i(1, 1), Vector2i(3, 3), Vector2i(4, 1), Vector2i(4, 3), Vector2i(1,3), Vector2i(2,1),Vector2i(5,1),Vector2i(1,4),Vector2i(0,2)]
 var owned_equipment: Array[String] = ["register"]
 var editing := false
 var selected := -1
@@ -27,6 +27,10 @@ var pointer_down := false
 var pointer_travel := Vector2.ZERO
 var dragged := false
 var interaction_blocked := false
+var extra_stock_visual: Node2D
+var extra_display_badge: Label
+var assistant: Node2D
+var assistant_active:=false
 var stock_visual: Node2D
 var work_markers: Array[Control]=[]
 var work_labels: Array[Label]=[]
@@ -78,6 +82,23 @@ func _ready() -> void:
 	objects.append(fridge)
 	stock_visual=preload("res://display_contents.gd").new()
 	objects[1].add_child(stock_visual)
+	var extra:=preload("res://equipment.gd").new()
+	extra.name="SecondDisplay"
+	extra.setup(objects[1].button.texture_normal,1,TITLES[7])
+	extra.pressed.connect(_select.bind(7))
+	add_child(extra)
+	objects.append(extra)
+	extra_stock_visual=preload("res://display_contents.gd").new()
+	extra.add_child(extra_stock_visual)
+	var assistant_table:=preload("res://equipment.gd").new()
+	assistant_table.name="AssistantStation"
+	assistant_table.setup(objects[4].button.texture_normal,4,TITLES[8])
+	assistant_table.pressed.connect(_select.bind(8))
+	add_child(assistant_table)
+	objects.append(assistant_table)
+	assistant=preload("res://chef.gd").new()
+	add_child(assistant)
+	assistant.visible=false
 	_create_work_markers()
 	chef = preload("res://chef.gd").new()
 	chef.name = "PastryChef"
@@ -99,6 +120,8 @@ func _ready() -> void:
 	badge_style.content_margin_right = 7
 	display_badge.add_theme_stylebox_override("normal", badge_style)
 	add_child(display_badge)
+	extra_display_badge=display_badge.duplicate()
+	add_child(extra_display_badge)
 	resized.connect(_arrange)
 	_arrange()
 
@@ -123,6 +146,7 @@ func _arrange() -> void:
 		objects[i].z_index = cells[i].x + cells[i].y + 1
 		objects[i].modulate = Color("c7e6b3") if selected == i else Color.WHITE
 	_update_chef()
+	_position_assistant()
 	_position_badge()
 	_position_work_markers()
 	queue_redraw()
@@ -160,7 +184,7 @@ func _select(index: int) -> void:
 		selected = index
 		_arrange()
 		hint_changed.emit("%s: нажми на свободную клетку" % TITLES[index])
-	elif index == 1:
+	elif index in [1,7]:
 		display_pressed.emit()
 	elif index == 3:
 		register_pressed.emit()
@@ -359,8 +383,12 @@ func _inside(cell: Vector2i) -> bool:
 	return cell.x >= 0 and cell.y >= 0 and cell.x < CELLS and cell.y < CELLS
 
 func pickup_path(start: Vector2i) -> Array[Vector2i]:
+	var index:=7 if is_owned(7) and current_recipe_id not in stock_visual.contents and current_recipe_id in extra_stock_visual.contents else 1
+	return _pickup_path_at(start,index)
+
+func _pickup_path_at(start: Vector2i, index: int) -> Array[Vector2i]:
 	for direction in [Vector2i.DOWN, Vector2i.RIGHT, Vector2i.UP, Vector2i.LEFT]:
-		var goal: Vector2i = cells[1] + direction
+		var goal: Vector2i = cells[index] + direction
 		if not _inside(goal) or is_occupied(goal) or goal == Vector2i(chef_position.round()):
 			continue
 		if walking and not route.is_empty() and goal == route.back():
@@ -370,7 +398,7 @@ func pickup_path(start: Vector2i) -> Array[Vector2i]:
 			continue
 		var old_target := customer_target
 		customer_target = goal
-		var reachable := can_complete_order()
+		var reachable := can_complete_order([2,0,index])
 		customer_target = old_target
 		if reachable:
 			return path
@@ -488,6 +516,8 @@ func update_display_stock(count: int, capacity: int) -> void:
 func _position_badge() -> void:
 	if display_badge != null:
 		display_badge.position = project(Vector2(cells[1]) + Vector2(0.5, 0.5)) - Vector2(display_badge.size.x * 0.5, unit * 1.25)
+	if extra_display_badge != null:
+		extra_display_badge.position=project(Vector2(cells[7])+Vector2(0.5,0.5))-Vector2(extra_display_badge.size.x*0.5,unit*1.25)
 
 func set_viewport_layout(area: Rect2, wide: bool) -> void:
 	if not camera_initialized or wide_camera != wide:
@@ -545,6 +575,7 @@ func apply_purchases(ids: Array[String]) -> void:
 	for i in range(objects.size()):
 		objects[i].visible = is_owned(i)
 	display_badge.visible = is_owned(1)
+	extra_display_badge.visible=is_owned(7)
 	camera_initialized = false
 	_arrange()
 
@@ -562,11 +593,25 @@ func prepare_purchase(index: int) -> bool:
 		return true
 	return false
 
-func update_display_inventory(stock: Dictionary, capacity: int) -> void:
+func update_display_inventory(stock: Dictionary, total_capacity: int) -> void:
+	var first: Dictionary={}
+	var second: Dictionary={}
+	var slots:=total_capacity/maxi(1,Equipment.display_count(owned_equipment))
+	var space:=slots
 	var total:=0
-	for count in stock.values(): total+=int(count)
-	update_display_stock(total,capacity)
-	stock_visual.set_stock(stock)
+	for id in preload("res://display_inventory.gd").IDS:
+		var count:=int(stock.get(id,0))
+		first[id]=mini(count,space)
+		second[id]=count-int(first[id])
+		space-=int(first[id])
+		total+=count
+	stock_visual.set_stock(first,slots)
+	extra_stock_visual.set_stock(second,slots)
+	update_display_stock(mini(total,slots),slots)
+	extra_display_badge.visible=is_owned(7)
+	extra_display_badge.text="%d / %d шт." % [maxi(0,total-slots),slots]
+	extra_display_badge.reset_size()
+	_position_badge()
 
 func _create_work_markers() -> void:
 	for i in range(objects.size()):
@@ -615,3 +660,19 @@ func _position_work_markers() -> void:
 		at.x=clampf(at.x,area.position.x+4,maxf(area.position.x+4,area.end.x-work_markers[i].size.x-4))
 		at.y=clampf(at.y,area.position.y+4,maxf(area.position.y+4,area.end.y-work_markers[i].size.y-4))
 		work_markers[i].position=at
+
+func set_assistant_work(active: bool, recipe: String="croissant", quantity: int=0) -> void:
+	assistant_active=active
+	assistant.working=active
+	assistant.carrying=not active and quantity>0
+	assistant.carrying_dough=true
+	assistant.carried_recipe=recipe
+	assistant.carried_count=quantity
+	_position_assistant()
+
+func _position_assistant() -> void:
+	if assistant==null: return
+	assistant.visible=is_owned(8)
+	assistant.unit=unit
+	assistant.position=project(Vector2(cells[8])+Vector2(0.5,1.3))
+	assistant.z_index=cells[8].x+cells[8].y+2

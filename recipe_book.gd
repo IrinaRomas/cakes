@@ -36,18 +36,21 @@ func _ready() -> void:
 	close.pressed.connect(hide)
 	outer.add_child(close)
 
-func show_recipes(total_xp: int, inventory, busy: bool, editing: bool = false, purchased: Array[String] = [], queue_full: bool = false) -> void:
+func show_recipes(total_xp: int, inventory, busy: bool, editing: bool = false, purchased: Array[String] = [], queue_full: bool = false, quotes: Dictionary={}, income: int=0) -> void:
 	for child in list.get_children():
 		list.remove_child(child)
 		child.queue_free()
-	_add_text("Витрина: %d / %d · в работе: %d" % [inventory.total(), inventory.CAPACITY, inventory.reserved_count], false, 22)
+	_add_text(("Витрины" if "display_extra" in purchased else "Витрина") + ": %d / %d · в работе: %d" % [inventory.total(), inventory.capacity, inventory.reserved_count], false, 22)
+	_add_text("Выручка от продаж: %d монет" % income)
 	var level := Catalog.level_for_xp(total_xp)
-	for recipe in Catalog.RECIPES:
+	for base_recipe in Catalog.RECIPES:
+		var recipe: Dictionary=quotes.get(base_recipe.id,base_recipe)
 		if recipe.level > level:
 			_add_text("%s · уровень %d · нужно %d опыта" % [recipe.title, recipe.level, Catalog.LEVEL_XP[recipe.level - 1]], true)
 			continue
 		var missing := Equipment.missing(recipe, purchased)
-		_add_text("%s · в витрине %d шт.\nПартия %d шт. · продажа за %d\n%s" % [recipe.title, inventory.count_of(recipe.id), recipe.batch, recipe.price,Catalog.route_title(recipe.id)])
+		_add_text("%s · в витрине %d шт.\nПартия %d шт. · продажа за %d\nГотовка %.1f сек. + время на переходы\n%s" % [recipe.title, inventory.count_of(recipe.id), recipe.batch, recipe.price,Catalog.processing_seconds(recipe),Catalog.route_title(recipe.id)])
+		_add_text("Выручка при продаже всей партии: %d монет" % (int(recipe.batch)*int(recipe.price)))
 		if not missing.is_empty():
 			_add_text("Нужно купить: " + Equipment.missing_titles(recipe, purchased), true)
 		var row := HBoxContainer.new()
@@ -69,7 +72,7 @@ func show_recipes(total_xp: int, inventory, busy: bool, editing: bool = false, p
 		discard.disabled = editing or inventory.count_of(recipe.id) == 0
 		discard.pressed.connect(func(): discard_requested.emit(recipe.id))
 		row.add_child(discard)
-	_add_text("Место резервируется при начале партии.\nПорядок партий меняется в окне «Очередь».")
+	_add_text("Приготовление бесплатно.\nМесто резервируется при запуске основного маршрута. Порядок партий меняется в окне «Очередь».")
 	popup_centered(Vector2i(540, 480))
 
 func _add_text(value: String, muted: bool = false, font_size: int = 17) -> void:

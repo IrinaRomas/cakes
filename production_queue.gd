@@ -51,12 +51,23 @@ func restore(data: ConfigFile, legacy_pending: String) -> void:
 	var resume_id: String=str(saved_active.get("recipe","")) if saved_active is Dictionary else ""
 	if resume_id.is_empty(): resume_id=legacy_pending
 	if Catalog.has_recipe(resume_id):
-		waiting.append({"id":next_id,"recipe":resume_id})
+		var job: Dictionary=saved_active.duplicate(true) if saved_active is Dictionary else {}
+		job.id=next_id
+		job.recipe=resume_id
+		job.preparing=false
+		job.erase("paid")
+		job.erase("cost")
+		waiting.append(job)
 		next_id+=1
 	var saved=data.get_value("queue","waiting",[])
 	if saved is Array:
 		for job in saved:
 			if waiting.size()>=LIMIT+1: break
 			if job is Dictionary and Catalog.has_recipe(str(job.get("recipe",""))):
-				waiting.append({"id":next_id,"recipe":str(job.recipe)})
+				var restored: Dictionary=job.duplicate(true)
+				restored.id=next_id
+				restored.preparing=false
+				restored.erase("paid")
+				restored.erase("cost")
+				waiting.append(restored)
 				next_id+=1

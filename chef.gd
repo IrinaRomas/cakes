@@ -54,12 +54,12 @@ func _draw() -> void:
 
 func draw_ellipse_tray(center: Vector2) -> void:
 	draw_style_box(_tray_style(),Rect2(center-Vector2(unit*0.48,unit*0.10),Vector2(unit*0.96,unit*0.23)))
-	var count:=mini(carried_count,8)
-	var columns:=4 if count>6 else 3
+	var count:=mini(carried_count,10)
+	var columns:=5 if count>8 else (4 if count>6 else 3)
 	for i in range(count):
 		var row:=i/columns
 		var column:=i%columns
-		var point:=center+Vector2((column-(columns-1)*0.5)*(0.22 if columns==4 else 0.27),(row-0.5)*0.17-0.07)*unit
+		var point:=center+Vector2((column-(columns-1)*0.5)*(0.18 if columns==5 else (0.22 if columns==4 else 0.27)),(row-0.5)*0.17-0.07)*unit
 		preload("res://pastry_icons.gd").draw_food(self,carried_recipe,point,unit*0.20,carrying_dough)
 
 func _tray_style() -> StyleBoxFlat:

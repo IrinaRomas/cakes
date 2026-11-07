@@ -1,6 +1,7 @@
 extends RefCounted
 
 const CAPACITY := 18
+var capacity := CAPACITY
 const IDS := ["croissant", "cookie", "cupcake", "mousse"]
 var stock := {"croissant": 0, "cookie": 0, "cupcake": 0, "mousse": 0}
 var reserved_id := ""
@@ -16,7 +17,7 @@ func count_of(id: String) -> int:
 	return int(stock.get(id, 0))
 
 func free_space() -> int:
-	return CAPACITY - total() - reserved_count
+	return capacity - total() - reserved_count
 
 func can_fit(quantity: int) -> bool:
 	return quantity > 0 and quantity <= free_space()
@@ -49,7 +50,7 @@ func write_save(data: ConfigFile) -> void:
 func restore_save(data: ConfigFile) -> String:
 	reserved_id = ""
 	reserved_count = 0
-	var free := CAPACITY
+	var free := capacity
 	for id in IDS:
 		stock[id] = clampi(int(data.get_value("display", id, 0)), 0, free)
 		free -= stock[id]

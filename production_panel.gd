@@ -42,7 +42,7 @@ func _ready() -> void:
 	close.pressed.connect(hide)
 	box.add_child(close)
 
-func show_queue(queue, stage_text: String, fraction: float, reason: String) -> void:
+func show_queue(queue, stage_text: String, fraction: float, reason: String, quotes: Dictionary={}) -> void:
 	update_current(stage_text,fraction)
 	for child in list.get_children():
 		list.remove_child(child)
@@ -60,11 +60,13 @@ func show_queue(queue, stage_text: String, fraction: float, reason: String) -> v
 		list.add_child(note)
 	for i in range(queue.waiting.size()):
 		var job: Dictionary=queue.waiting[i]
-		var recipe:=Catalog.get_recipe(job.recipe)
+		var recipe: Dictionary=job.get("snapshot",quotes.get(job.recipe,Catalog.get_recipe(job.recipe)))
 		var row:=HBoxContainer.new()
 		list.add_child(row)
 		var label:=Label.new()
 		label.text="%d. %s × %d" % [i+1,recipe.title,recipe.batch]
+		label.add_theme_font_size_override("font_size",14)
+		label.text+="\n"+("Подготовлено" if job.get("prepared",false) else ("Помощник готовит" if job.get("preparing",false) else "Ожидает"))
 		label.size_flags_horizontal=Control.SIZE_EXPAND_FILL
 		label.add_theme_color_override("font_color",Color("344b3f"))
 		row.add_child(label)

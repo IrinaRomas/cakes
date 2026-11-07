@@ -35,7 +35,7 @@ static func steps(id: String) -> Array[Dictionary]:
 	var result: Array[Dictionary] = [{"station":2,"key":"preparing","title":"Подготовка","duration":recipe.prep,"passive":false}]
 	if id=="cookie": result.append({"station":4,"key":"forming","title":"Формовка","duration":1.5,"passive":false})
 	if id=="mousse":
-		result.append({"station":6,"key":"cooling","title":"Охлаждение","duration":8.0,"passive":true})
+		result.append({"station":6,"key":"cooling","title":"Охлаждение","duration":10.0,"passive":true})
 	else:
 		result.append({"station":0,"key":"baking","title":"Выпечка","duration":recipe.bake,"passive":true})
 	if id in ["cupcake","mousse"]: result.append({"station":5,"key":"decorating","title":"Оформление","duration":2.0,"passive":false})
@@ -46,3 +46,9 @@ static func route_title(id: String) -> String:
 	var titles := PackedStringArray()
 	for step in steps(id): titles.append(step.title)
 	return " → ".join(titles)
+
+static func processing_seconds(recipe: Dictionary) -> float:
+	var duration:=0.0
+	for step in steps(recipe.id):
+		duration+=float(recipe.bake) if step.key=="baking" else float(step.duration)
+	return duration
