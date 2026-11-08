@@ -51,7 +51,7 @@ func check() -> void:
 		require(scene.coins == 15*count, "No double sale")
 	# Accept and sell an existing item while the chef is making another recipe.
 	scene.room.pause_customers()
-	scene.experience = 75
+	scene.experience = 180
 	scene._refresh()
 	scene.room.pending_new_recipe = ""
 	scene.room.recipe_rotation = 0

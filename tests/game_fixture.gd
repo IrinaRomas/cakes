@@ -14,3 +14,7 @@ func _backup_progress() -> void:
 
 # Explicit-queue suites isolate planning; autonomous behavior has its own suite.
 func _plan_autonomous_batch() -> void: pass
+
+# Legacy routing suites run the single-customer harness; check_service covers the new staff flow.
+func _setup_customer_service() -> void:
+	service_label.hide()

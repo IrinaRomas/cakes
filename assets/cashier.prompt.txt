@@ -1,0 +1,5 @@
+Tool: built-in image_gen
+Style reference: assets/chef.png
+Transparent background: true
+
+Use case: stylized-concept. Asset type: transparent full-body game character sprite for an isometric pastry shop. Input image is STYLE AND CAMERA REFERENCE ONLY, not an edit target. Create a distinct young adult MALE cashier: short dark hair, friendly face, cream button-up shirt with rolled sleeves, muted blue-grey waist apron, dark trousers, brown shoes. No chef hat. Match the reference's charming polished 3D mobile game rendering, slightly oversized head, soft lighting, three-quarter view facing right and slightly down, same standing posture with hands naturally forward ready to serve. Exactly one character centered, entire body and both shoes fully visible with small transparent padding. Background must be genuine transparent alpha, no ground plane, no halo, no shadow outside the character, no text, no furniture, no props.

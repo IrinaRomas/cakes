@@ -15,6 +15,8 @@ func check() -> void:
 	Engine.time_scale = 12.0
 	game = load("res://tests/game_fixture.gd").new()
 	root.add_child(game)
+	game.experience=35
+	game._refresh()
 	await wait_state("ordering")
 	game._accept_order()
 	await wait_state("waiting")
@@ -27,7 +29,7 @@ func check() -> void:
 		await wait_state("leaving")
 		expect(game.inventory.count_of("croissant") == 6-number, "Each sale uses one item")
 		expect(not game.busy, "No additional baking for remaining stock")
-	expect(game.experience == 25 and game.coins == 75, "Five sales award level-two threshold")
+	expect(game.experience == 60 and game.coins == 75, "Five sales award level-two threshold")
 	expect("cookie" in game.room.recipe_pool, "Cookie unlock remains tied to sales")
 	await wait_state("ordering")
 	expect(game.room.current_recipe_id == "cookie", "Next buyer tries newly unlocked recipe")
@@ -37,6 +39,6 @@ func check() -> void:
 	game._bake_selected()
 	await wait_state("leaving")
 	expect(game.inventory.count_of("cookie") == 7 and game.inventory.count_of("croissant") == 1, "Eight-cookie batch leaves seven after sale")
-	expect(game.coins == 97 and game.experience == 31, "Recipe-specific sale rewards retained")
+	expect(game.coins == 97 and game.experience == 66, "Recipe-specific sale rewards retained")
 	print("PASS: batch delivered to waiting customer, five sales from one batch, level-up, newly unlocked demand, separate stock and cookie batch")
 	quit()

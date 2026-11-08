@@ -7,6 +7,8 @@ func quote(id: String, purchased: Array[String], _level: int) -> Dictionary:
 	if "oven_upgrade" in purchased and id!="mousse":
 		recipe.batch+=2
 		recipe.bake*=0.7
+	recipe.work_factor=0.75 if "staff_work" in purchased else 1.0
+	recipe.prep*=recipe.work_factor
 	recipe.revenue=int(recipe.batch)*int(recipe.price)
 	return recipe
 

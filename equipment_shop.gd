@@ -51,6 +51,7 @@ func show_shop(coins: int, level: int, purchased: Array[String], busy: bool, edi
 		list.remove_child(child)
 		child.queue_free()
 	for entry in Equipment.ITEMS:
+		if entry.id.begins_with("staff_"): continue
 		var quantity:=Equipment.display_count(purchased) if entry.id=="display" else int(entry.id in purchased)
 		var required_level: int=Equipment.item("display_extra").level if entry.id=="display" and quantity>0 else entry.level
 		var title := Label.new()
@@ -73,6 +74,7 @@ func show_shop(coins: int, level: int, purchased: Array[String], busy: bool, edi
 		button.disabled = true
 		if entry.id in purchased and (entry.id!="display" or quantity>=2):
 			button.text = "Установлено: %d из 2" % quantity if entry.id=="display" else "Уже установлено"
+			if entry.id=="assistant_station": button.text="Стол установлен · найм в «Персонале»"
 		elif not Equipment.prerequisites(entry,purchased).is_empty():
 			button.text="Сначала купи: "+Equipment.prerequisites(entry,purchased)
 		elif required_level > level:

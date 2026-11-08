@@ -1,6 +1,6 @@
 extends RefCounted
 
-const LEVEL_XP := [0,25,75,150]
+const LEVEL_XP = preload("res://progression.gd").LEVEL_XP
 const RECIPES := [
 	{"id":"croissant","title":"Круассан","level":1,"price":15,"xp":5,"prep":2.0,"bake":5.0,"batch":6,"required":["mixer","oven","display"],"stations":[2,0,1]},
 	{"id":"cookie","title":"Печенье","level":2,"price":22,"xp":6,"prep":2.0,"bake":6.0,"batch":8,"required":["mixer","forming","oven","display"],"stations":[2,4,0,1]},
@@ -50,5 +50,7 @@ static func route_title(id: String) -> String:
 static func processing_seconds(recipe: Dictionary) -> float:
 	var duration:=0.0
 	for step in steps(recipe.id):
-		duration+=float(recipe.bake) if step.key=="baking" else float(step.duration)
+		if step.key=="baking": duration+=float(recipe.bake)
+		elif step.key=="preparing": duration+=float(recipe.prep)
+		else: duration+=float(step.duration)*(float(recipe.get("work_factor",1.0)) if not step.passive else 1.0)
 	return duration

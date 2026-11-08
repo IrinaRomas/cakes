@@ -48,7 +48,7 @@ func show_queue(queue, stage_text: String, fraction: float, reason: String, quot
 		list.remove_child(child)
 		child.queue_free()
 	var help:=Label.new()
-	help.text="Ожидают: %d/%d · выше в списке — раньше в работу" % [queue.waiting.size(),queue.LIMIT]
+	help.text="Ожидают: %d/%d · выше в списке — раньше в работу" % [queue.waiting.size(),queue.limit]
 	help.add_theme_color_override("font_color",Color("344b3f"))
 	list.add_child(help)
 	if not reason.is_empty():

@@ -25,7 +25,7 @@ func check() -> void:
 	game=load("res://tests/game_fixture.gd").new()
 	game.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(game)
-	game.experience=150
+	game.experience=380
 	game.purchased.append("fridge")
 	game.room.apply_purchases(game.purchased)
 	game.room.customer_delay=1000

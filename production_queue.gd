@@ -1,13 +1,14 @@
 extends RefCounted
 
 const LIMIT := 5
+var limit:=LIMIT
 const Catalog = preload("res://recipes.gd")
 var waiting: Array[Dictionary] = []
 var active: Dictionary = {}
 var next_id := 1
 
 func enqueue(recipe: String) -> int:
-	if waiting.size()>=LIMIT or not Catalog.has_recipe(recipe): return -1
+	if waiting.size()>=limit or not Catalog.has_recipe(recipe): return -1
 	var id := next_id
 	next_id+=1
 	waiting.append({"id":id,"recipe":recipe})
@@ -62,7 +63,7 @@ func restore(data: ConfigFile, legacy_pending: String) -> void:
 	var saved=data.get_value("queue","waiting",[])
 	if saved is Array:
 		for job in saved:
-			if waiting.size()>=LIMIT+1: break
+			if waiting.size()>=limit+1: break
 			if job is Dictionary and Catalog.has_recipe(str(job.get("recipe",""))):
 				var restored: Dictionary=job.duplicate(true)
 				restored.id=next_id

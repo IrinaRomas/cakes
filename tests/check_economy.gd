@@ -69,7 +69,7 @@ func check() -> void:
 	root.add_child(starter)
 	for id in ["display","mixer","oven"]: starter._purchase_equipment(id)
 	starter.coins=180
-	starter.experience=25
+	starter.experience=1100
 	starter._purchase_equipment("display_shelves")
 	require("display_shelves" in starter.purchased and starter.coins==0,"No obsolete ingredient budget blocks purchases")
 	upgraded._open_recipe_book()

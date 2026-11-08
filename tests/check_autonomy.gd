@@ -60,8 +60,12 @@ func check() -> void:
 	require(copy.auto_restock,"Old saves automatically enable autonomy")
 	copy.queue_free()
 	var helper=new_game()
+	helper.experience=1700
+	helper.hired_staff.append("assistant")
 	helper.purchased.append("assistant_station")
 	helper.room.apply_purchases(helper.purchased)
+	helper._configure_staff()
+	helper._refresh()
 	deadline=Time.get_ticks_msec()+10000
 	while helper.preparing_job_id<0 and Time.get_ticks_msec()<deadline: await process_frame
 	require(helper.busy and helper.preparing_job_id>=0,"Assistant autonomously prepares next tray in parallel")

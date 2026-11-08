@@ -20,7 +20,7 @@ func check() -> void:
 	var deadline := Time.get_ticks_msec()+10000
 	while game.coins < 15 and Time.get_ticks_msec()<deadline:
 		if game.taking_order:
-			require(game.layout_button.disabled and not game.batch_button.disabled,"Reception locks furniture but allows planning batches")
+			require(not game.layout_button.disabled and not game.batch_button.disabled,"Reception keeps furniture and planning accessible")
 			if game.room.chef.working:
 				var cell: Vector2i = Vector2i(game.room.chef_position.round())
 				var register: Vector2i = game.room.cells[3]
@@ -35,7 +35,7 @@ func check() -> void:
 	# Pause further arrivals until a new batch reaches the oven.
 	game.room.pause_customers()
 	game.room.customer_delay=1000
-	game.experience=25
+	game.experience=60
 	game._refresh()
 	game._start_batch("cookie")
 	deadline=Time.get_ticks_msec()+10000
@@ -57,7 +57,7 @@ func check() -> void:
 	require(not game.room.chef.carrying and not game.taking_order,"Chef tasks return to idle")
 	var cold=load("res://tests/game_fixture.gd").new()
 	root.add_child(cold)
-	cold.experience=150
+	cold.experience=380
 	cold.purchased.append("fridge")
 	cold.room.apply_purchases(cold.purchased)
 	cold.room.customer_delay=1000

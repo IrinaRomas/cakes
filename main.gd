@@ -1,5 +1,13 @@
 extends Control
 
+var work_generation:=0
+var relocating_work:=false
+var layout_generation:=0
+var hired_staff: Array[String]=["chef"]
+var staff_panel: Control
+var header_menu: GridContainer
+var progression_panel: Control
+const Progression=preload("res://progression.gd")
 const Catalog = preload("res://recipes.gd")
 const Equipment = preload("res://equipment_catalog.gd")
 var auto_status:=""
@@ -37,6 +45,7 @@ signal stage_started(recipe_id: String, phase: String, station: int)
 var stage_text := ""
 var inventory = preload("res://display_inventory.gd").new()
 var pending_resume := ""
+var service_label: Label
 var stock_label: Label
 var recipe_selector: OptionButton
 var batch_button: Button
@@ -107,7 +116,11 @@ func _ready() -> void:
 	coin_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	coin_label.add_theme_color_override("font_color", Color("344b3f"))
 	tools.add_child(coin_label)
-	var menu := HBoxContainer.new()
+	var menu := GridContainer.new()
+	menu.columns=2
+	header_menu=menu
+	menu.add_theme_constant_override("h_separation",8)
+	menu.add_theme_constant_override("v_separation",6)
 	tools.add_child(menu)
 	recipe_button = Button.new()
 	recipe_button.custom_minimum_size = Vector2(120, 44)
@@ -119,6 +132,16 @@ func _ready() -> void:
 	recipe_book.production_requested.connect(_start_batch)
 	recipe_book.discard_requested.connect(_discard_stock)
 	recipe_book.auto_restock_changed.connect(_set_auto_restock)
+	recipe_book.progression_requested.connect(func(): recipe_book.hide(); _open_progression())
+	progression_panel=preload("res://progression_panel.gd").new()
+	add_child(progression_panel)
+	progression_panel.visibility_changed.connect(_sync_room_input)
+	level_label.mouse_filter=Control.MOUSE_FILTER_STOP
+	level_label.mouse_default_cursor_shape=Control.CURSOR_POINTING_HAND
+	level_label.tooltip_text="Карта уровней"
+	level_label.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.pressed and event.button_index==MOUSE_BUTTON_LEFT: _open_progression()
+	)
 	recipe_book.shop_requested.connect(func(): recipe_book.hide(); _open_shop())
 	layout_button = Button.new()
 	layout_button.text = "Мебель"
@@ -130,6 +153,17 @@ func _ready() -> void:
 	shop_button.custom_minimum_size = Vector2(104,44)
 	shop_button.pressed.connect(_open_shop)
 	menu.add_child(shop_button)
+	var staff_button:=Button.new()
+	staff_button.text="Персонал"
+	staff_button.custom_minimum_size=Vector2(110,44)
+	staff_button.pressed.connect(_open_staff)
+	menu.add_child(staff_button)
+	staff_panel=preload("res://staff_panel.gd").new()
+	add_child(staff_panel)
+	staff_panel.hire_requested.connect(_hire_staff)
+	staff_panel.upgrade_requested.connect(_purchase_equipment)
+	staff_panel.shop_requested.connect(func(): staff_panel.hide(); _open_shop("Сначала купи рабочее место, затем найми помощника в «Персонале»."))
+	staff_panel.visibility_changed.connect(_sync_room_input)
 	equipment_shop = preload("res://equipment_shop.gd").new()
 	add_child(equipment_shop)
 	equipment_shop.visibility_changed.connect(_sync_room_input)
@@ -156,6 +190,12 @@ func _ready() -> void:
 	stock_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stock_label.add_theme_color_override("font_color", Color("344b3f"))
 	controls_box.add_child(stock_label)
+	service_label=Label.new()
+	service_label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
+	service_label.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
+	service_label.add_theme_font_size_override("font_size",14)
+	service_label.add_theme_color_override("font_color",Color("344b3f"))
+	controls_box.add_child(service_label)
 	production_row = HBoxContainer.new()
 	production_row.add_theme_constant_override("separation", 10)
 	controls_box.add_child(production_row)
@@ -204,6 +244,8 @@ func _ready() -> void:
 	bottom_panel.minimum_size_changed.connect(_queue_layout)
 	_load_progress()
 	room.apply_purchases(purchased)
+	_configure_staff()
+	_setup_customer_service()
 	_refresh()
 	if fresh_game:
 		_save_progress()
@@ -237,6 +279,7 @@ func _arrange_screen() -> void:
 		_queue_layout()
 		return
 	wide_layout = wide
+	header_menu.columns=4 if wide else 2
 	_update_level_display()
 	center_camera.visible = wide
 	var viewport := get_viewport_rect().size
@@ -260,6 +303,10 @@ func _arrange_screen() -> void:
 	_refresh_stock()
 
 func _process(delta: float) -> void:
+	if room.editing or relocating_work: return
+	if room.service!=null:
+		service_label.text=room.service.summary()
+		service_label.add_theme_color_override("font_color",Color("a33f37") if not room.service.missing_orders().is_empty() else Color("344b3f"))
 	order_retry=maxf(0.0,order_retry-delta)
 	_try_take_order()
 	_plan_autonomous_batch()
@@ -305,7 +352,7 @@ func _start_batch(id: String) -> void:
 		return
 	var job_id: int=job_queue.enqueue(id)
 	if job_id<0:
-		status_label.text="В очереди уже пять партий. Заверши или отмени одну."
+		status_label.text="В очереди уже %d партий. Заверши или отмени одну." % job_queue.limit
 		return
 	var index: int=job_queue.waiting.size()-1
 	while index>0 and job_queue.waiting[index-1].get("automatic",false):
@@ -339,25 +386,29 @@ func _dispatch_queue() -> void:
 	_run_batch(recipe)
 
 func _run_batch(recipe: Dictionary) -> void:
+	var epoch:=work_generation
 	active_recipe=recipe.duplicate()
 	room.chef.carried_recipe=recipe.id
 	room.chef.carried_count=recipe.batch
 	room.chef.carrying=false
 	busy=true
 	room.busy=true
-	layout_button.disabled=true
+	layout_button.disabled=false
 	_save_progress()
 	_queue_changed()
 	var steps: Array[Dictionary]=Catalog.steps(recipe.id)
 	if job_queue.active.get("prepared",false):
 		steps.pop_front()
 		await _visit(8,"Забираем подготовленный поднос у помощника")
+		if epoch!=work_generation: return
 		room.chef.carrying=true
 		room.chef.carrying_dough=true
 		room.set_assistant_work(false)
 		room.clear_work_status(8)
 	for step in steps:
 		if step.key=="baking": step.duration=recipe.bake
+		elif step.key=="preparing": step.duration=recipe.prep
+		elif not step.passive: step.duration*=float(recipe.get("work_factor",1.0))
 	var destination:=_display_destination(recipe)
 	for step in steps:
 		if step.station==1: step.station=destination
@@ -371,6 +422,7 @@ func _run_batch(recipe: Dictionary) -> void:
 		progress.max_value=active_step.duration
 		progress.value=0
 		await _visit(active_step.station,"%s × %d · %s" % [recipe.title,recipe.batch,active_step.title])
+		if epoch!=work_generation: return
 		stage_history.append(active_step.station)
 		if active_step.passive:
 			room.chef.carrying=false
@@ -380,14 +432,17 @@ func _run_batch(recipe: Dictionary) -> void:
 		stage_has_started=true
 		room.show_work_status(active_step.station,active_step.title,0)
 		stage_started.emit(recipe.id,active_step.key,active_step.station)
-		await get_tree().create_timer(float(active_step.duration)).timeout
+		await _wait_work(float(active_step.duration))
+		if epoch!=work_generation: return
 		remaining=0
 		room.chef.working=false
 		if active_step.passive:
 			production_phase="collecting"
 			room.show_work_status(active_step.station,"Готово · ждёт кондитера",1)
 			if taking_order: await order_service_finished
+			if epoch!=work_generation: return
 			await _visit(active_step.station,"Забираем партию · "+active_step.title)
+			if epoch!=work_generation: return
 		room.clear_work_status(active_step.station)
 		room.chef.carrying=true
 		room.chef.carrying_dough=active_step.key in ["preparing","forming"]
@@ -403,6 +458,7 @@ func _run_batch(recipe: Dictionary) -> void:
 	_save_progress()
 	_serve_customer()
 	_queue_changed()
+	if room.service!=null: room.park_chef()
 	batch_completed.emit(recipe.id)
 
 func _stage_fraction() -> float:
@@ -422,6 +478,7 @@ func _queue_changed() -> void:
 	_refresh()
 	if queue_panel.visible: _open_queue()
 	if equipment_shop.visible: _open_shop()
+	if staff_panel.visible: _open_staff()
 
 func _open_queue() -> void:
 	queue_panel.show_queue(job_queue,_production_summary(),_stage_fraction(),queue_reason,_recipe_quotes())
@@ -447,10 +504,23 @@ func _cancel_job(id: int) -> void:
 		_queue_changed()
 
 func _visit(station: int, message: String) -> void:
-	stage_text = message
-	status_label.text = message
-	if room.walk_to_station(station):
-		await room.arrived
+	var epoch:=work_generation
+	stage_text=message
+	while is_inside_tree():
+		if room.editing:
+			await get_tree().process_frame
+			if epoch!=work_generation: return
+			continue
+		status_label.text=message
+		if room.walk_to_station(station):
+			while room.walking and epoch==work_generation:
+				await get_tree().process_frame
+			if epoch!=work_generation: return
+			if not room.editing and absi(roundi(room.chef_position.x)-room.cells[station].x)+absi(roundi(room.chef_position.y)-room.cells[station].y)==1: return
+		else:
+			status_label.text="Нет прохода к %s. Открой «Мебель» и освободи проход." % room.TITLES[station]
+			await get_tree().process_frame
+			if epoch!=work_generation: return
 
 func _accept_order() -> void:
 	if not room.editing:
@@ -463,11 +533,14 @@ func _customer_updated() -> void:
 		_refresh()
 
 func _serve_customer() -> void:
-	if room.customer_state != "waiting" or room.editing or "display" not in purchased:
-		return
-	var sold_recipe: Dictionary = Catalog.get_recipe(room.current_recipe_id)
-	if not inventory.take_one(sold_recipe.id):
-		return
+	if room.service!=null: return
+	if room.customer_state!="waiting" or room.editing or "display" not in purchased: return
+	if _sell_recipe(room.current_recipe_id): room.finish_customer()
+
+func _sell_recipe(id: String) -> bool:
+	if room.editing or "display" not in purchased: return false
+	var sold_recipe: Dictionary=Catalog.get_recipe(id)
+	if not inventory.take_one(sold_recipe.id): return false
 	var previous_level := Catalog.level_for_xp(experience)
 	coins += int(sold_recipe.price)
 	economy.sales_income+=int(sold_recipe.price)
@@ -479,13 +552,15 @@ func _serve_customer() -> void:
 		for recipe in Catalog.RECIPES:
 			if recipe.level > previous_level and recipe.level <= new_level:
 				opened.append(recipe.title)
-		unlock_notice.text = "Уровень %d! Открыто: %s" % [new_level, ", ".join(opened)]
+		unlock_notice.text = "Уровень %d! %s" % [new_level,Progression.MILESTONES[new_level-1]]
+		_configure_staff()
 		unlock_notice.visible = true
 		notice_remaining = 8.0
 	room.set_recipe_pool(_orderable_recipe_ids())
 	baked += 1
 	_save_progress()
-	room.finish_customer()
+	_refresh()
+	return true
 
 func _refresh() -> void:
 	coin_label.text = "%d монет" % coins
@@ -506,6 +581,8 @@ func _refresh() -> void:
 		status_label.text = "Продано 1 шт. · %s" % last_reward if room.customer.paid else "Покупатель ушёл без покупки · ждём следующего"
 	else:
 		status_label.text = "Ждём покупателя · продано изделий: %d" % baked
+	if room.service!=null and not busy:
+		status_label.text="Кондитер свободен · ждёт продаж и места в витринах" if auto_restock else "Кондитер свободен · автопополнение на паузе"
 	if busy and not taking_order:
 		status_label.text=stage_text if remaining<=0 else "%s × %d · %s · %d сек." % [active_recipe.title,active_recipe.batch,active_step.title,ceili(remaining)]
 	elif not busy:
@@ -530,12 +607,12 @@ func _refresh_batch_button() -> void:
 	var recipe: Dictionary=_effective_recipe(_selected_id())
 	var missing:=Equipment.missing(recipe,purchased)
 	batch_button.text="В очередь · %d шт." % recipe.batch
-	batch_button.disabled=room.editing or job_queue.waiting.size()>=job_queue.LIMIT or not missing.is_empty()
+	batch_button.disabled=room.editing or job_queue.waiting.size()>=job_queue.limit or not missing.is_empty()
 	if not missing.is_empty(): batch_button.text="Нужно оборудование"
-	elif job_queue.waiting.size()>=job_queue.LIMIT: batch_button.text="Очередь заполнена"
+	elif job_queue.waiting.size()>=job_queue.limit: batch_button.text="Очередь заполнена"
 
 func _open_recipe_book() -> void:
-	recipe_book.show_recipes(experience, inventory, busy or taking_order, room.editing, purchased, job_queue.waiting.size()>=job_queue.LIMIT,_recipe_quotes(),economy.sales_income,auto_restock)
+	recipe_book.show_recipes(experience, inventory, busy or taking_order, room.editing, purchased, job_queue.waiting.size()>=job_queue.limit,_recipe_quotes(),economy.sales_income,auto_restock)
 
 func _discard_stock(id: String) -> void:
 	if room.editing or not inventory.take_one(id):
@@ -563,17 +640,19 @@ func _update_level_display() -> void:
 	if level < Catalog.LEVEL_XP.size():
 		var start: int = Catalog.LEVEL_XP[level - 1]
 		var target: int = Catalog.LEVEL_XP[level]
-		var next_title: String = Catalog.RECIPES[level].title
+		var next_title: String = Progression.NEXT_TITLES[level]
 		level_label.text = ("Уровень %d · %d/%d опыта" + (" · " if wide_layout else "\n") + "Ещё %d опыта — %s") % [level, experience - start, target - start, target - experience, next_title]
 		xp_progress.max_value = target - start
 		xp_progress.value = experience - start
 	else:
-		level_label.text = "Уровень %d · %d опыта · все %d рецепта открыты" % [level, experience,Catalog.RECIPES.size()]
+		level_label.text = ("Уровень %d · %d опыта"+(" · " if wide_layout else "\n")+"все этапы развития открыты") % [level, experience]
 		xp_progress.max_value = 1
 		xp_progress.value = 1
 
 func _progress_data() -> ConfigFile:
 	var data := ConfigFile.new()
+	data.set_value("staff","hired",PackedStringArray(hired_staff))
+	data.set_value("progression","version",Progression.VERSION)
 	data.set_value("progress", "coins", coins)
 	data.set_value("progress", "baked", baked)
 	data.set_value("progress", "experience", experience)
@@ -595,6 +674,9 @@ func _save_progress() -> void:
 func _restore_progress(data: ConfigFile) -> void:
 	fresh_game = false
 	economy.restore(data)
+	hired_staff=["chef"]
+	for role in data.get_value("staff","hired",[]):
+		if role in ["cashier","assistant"] and role not in hired_staff: hired_staff.append(role)
 	auto_restock=bool(data.get_value("automation","enabled",true))
 	purchased.clear()
 	var saved_purchases = data.get_value("business", "purchased", Equipment.LEGACY)
@@ -606,7 +688,8 @@ func _restore_progress(data: ConfigFile) -> void:
 	room.apply_purchases(purchased)
 	coins = maxi(0, int(data.get_value("progress", "coins", 0)))
 	baked = maxi(0, int(data.get_value("progress", "baked", 0)))
-	experience = maxi(0, int(data.get_value("progress", "experience", 0)))
+	experience = Progression.migrate_xp(data,maxi(0, int(data.get_value("progress", "experience", 0))))
+	_configure_staff()
 	inventory.capacity=_storage_capacity()
 	pending_resume = inventory.restore_save(data)
 	if pending_resume not in Catalog.unlocked_ids(experience):
@@ -633,14 +716,16 @@ func _load_progress() -> void:
 		_restore_progress(data)
 
 func _toggle_layout() -> void:
-	if busy or taking_order or preparing_job_id>=0:
-		return
+	layout_generation+=1
 	room.set_editing(not room.editing)
 	_refresh_stock()
-	layout_button.text = "Готово" if room.editing else "Мебель"
+	layout_button.text="Готово" if room.editing else "Мебель"
+	layout_button.disabled=false
 	if room.editing:
-		status_label.text = "Выбери предмет, затем свободную клетку пола."
+		status_label.text="Работа на паузе. Выбери предмет, затем свободную клетку."
 	else:
+		_resume_layout_work(layout_generation)
+		_save_progress()
 		_refresh()
 
 func _orderable_recipe_ids() -> Array[String]:
@@ -653,6 +738,7 @@ func _orderable_recipe_ids() -> Array[String]:
 	return ready
 
 func _open_shop(note: String = "") -> void:
+	if staff_panel!=null: staff_panel.hide()
 	var message := note
 	if message.is_empty() and Equipment.missing(Catalog.RECIPES[0], purchased).is_empty():
 		message = "Новые аппараты открываются вместе с уровнями и рецептами."
@@ -662,47 +748,63 @@ func _purchase_equipment(id: String) -> void:
 	if id=="display" and "display" in purchased: id="display_extra"
 	var entry: Dictionary = Equipment.item(id)
 	if id=="display_extra" and "display" not in purchased:
-		_open_shop("Сначала купи первую витрину.")
+		_purchase_feedback(id,"Сначала купи первую витрину.")
 		return
 	if entry.is_empty() or id in purchased:
 		return
 	if busy or taking_order or preparing_job_id>=0 or room.editing:
-		_open_shop("Заверши партию или расстановку перед покупкой.")
+		_purchase_feedback(id,"Заверши партию или расстановку перед покупкой.")
 		return
 	if entry.level > Catalog.level_for_xp(experience):
-		_open_shop("Для покупки нужен уровень %d." % entry.level)
+		_purchase_feedback(id,"Для покупки нужен уровень %d." % entry.level)
 		return
 	if not Equipment.prerequisites(entry,purchased).is_empty():
-		_open_shop("Сначала купи: "+Equipment.prerequisites(entry,purchased))
+		_purchase_feedback(id,"Сначала купи: "+Equipment.prerequisites(entry,purchased))
 		return
 	if coins < entry.price:
-		_open_shop("Не хватает %d монет." % (entry.price - coins))
+		_purchase_feedback(id,"Не хватает %d монет." % (entry.price - coins))
 		return
 	if entry.index>=0 and not room.prepare_purchase(entry.index):
-		_open_shop("Нет свободного места. Освободи клетку в зале.")
+		_purchase_feedback(id,"Нет свободного места. Освободи клетку в зале.")
 		return
 	coins -= int(entry.price)
 	purchased.append(id)
 	room.apply_purchases(purchased)
+	_configure_staff()
 	_save_progress()
 	_refresh()
 	_queue_layout()
-	_open_shop("%s куплен и установлен в зале." % entry.title)
+	_purchase_feedback(id,"%s куплен и установлен в зале." % entry.title)
 
 func _confirm_new_game() -> void:
-	if busy or taking_order or preparing_job_id>=0:
-		_open_shop("Сначала дождись завершения партии.")
-		return
 	new_game_dialog.popup_centered(Vector2i(520,180))
 
 func _backup_progress() -> void:
 	_progress_data().save("user://cakes_progress_backup.cfg")
 
 func _start_new_game() -> void:
-	if busy or taking_order or preparing_job_id>=0:
-		return
 	_backup_progress()
+	work_generation+=1
+	layout_generation+=1
+	busy=false
+	taking_order=false
+	relocating_work=false
+	room.busy=false
+	room.walking=false
+	room.route.clear()
+	room.route_station=-1
+	room.chef.working=false
+	room.chef.walking=false
+	room.chef.carrying=false
+	stage_has_started=false
+	production_phase=""
+	stage_history.clear()
+	preparing_remaining=0
+	order_retry=0
+	for index in range(room.cells.size()): room.clear_work_status(index)
+	for modal in [new_game_dialog,recipe_book,queue_panel,progression_panel,staff_panel]: modal.hide()
 	coins = Equipment.STARTING_COINS
+	hired_staff=["chef"]
 	auto_restock=true
 	experience = 0
 	baked = 0
@@ -730,15 +832,17 @@ func _start_new_game() -> void:
 	room.pending_new_recipe = ""
 	room.recipe_rotation = 0
 	room.apply_purchases(purchased)
+	_configure_staff()
 	_save_progress()
 	_queue_changed()
 	_queue_layout()
 	_open_shop()
 
 func _sync_room_input() -> void:
-	room.interaction_blocked = (equipment_shop != null and equipment_shop.visible) or (recipe_book != null and recipe_book.visible) or (new_game_dialog != null and new_game_dialog.visible) or (queue_panel != null and queue_panel.visible)
+	room.interaction_blocked = (equipment_shop != null and equipment_shop.visible) or (recipe_book != null and recipe_book.visible) or (new_game_dialog != null and new_game_dialog.visible) or (queue_panel != null and queue_panel.visible) or (progression_panel!=null and progression_panel.visible) or (staff_panel!=null and staff_panel.visible)
 
 func _try_take_order() -> void:
+	if room.service!=null: return
 	if taking_order or room.editing or room.customer_state != "ordering" or order_retry > 0.0:
 		return
 	if busy and (production_phase not in ["baking","cooling"] or remaining <= 0.0):
@@ -750,23 +854,27 @@ func _try_take_order() -> void:
 	_take_order()
 
 func _take_order() -> void:
+	var epoch:=work_generation
 	taking_order = true
 	room.busy = true
-	layout_button.disabled = true
+	layout_button.disabled = false
 	_refresh()
 	status_label.text = "Кондитер идёт к кассе…"
 	if room.walk_to_station(3):
-		await room.arrived
+		while room.walking and epoch==work_generation:
+			await get_tree().process_frame
+		if epoch!=work_generation: return
 		room.chef.working = true
 		room.show_work_status(3,"Приём заказа",0)
 		status_label.text = "Кондитер принимает заказ…"
-		await get_tree().create_timer(0.8).timeout
+		await _wait_work(0.8)
+		if epoch!=work_generation: return
 		room.chef.working = false
 		room.clear_work_status(3)
 		_accept_order()
 	taking_order = false
 	room.busy = busy
-	layout_button.disabled = busy
+	layout_button.disabled = false
 	order_retry = 1.0
 	_refresh()
 	if equipment_shop.visible:
@@ -774,6 +882,7 @@ func _take_order() -> void:
 	order_service_finished.emit()
 
 func _update_customer_wait(delta: float) -> void:
+	if room.service!=null: return
 	if room.customer_state != "waiting":
 		customer_wait_remaining=CUSTOMER_WAIT_SECONDS
 		room.customer.wait_seconds=-1
@@ -814,7 +923,7 @@ func _snapshot_job(job: Dictionary, recipe: Dictionary) -> void:
 	if not job.has("snapshot"): job.snapshot=recipe.duplicate(true)
 
 func _try_prepare_next() -> void:
-	if "assistant_station" not in purchased or preparing_job_id>=0 or not busy or room.editing: return
+	if "assistant" not in hired_staff or Catalog.level_for_xp(experience)<7 or "assistant_station" not in purchased or preparing_job_id>=0 or not busy or room.editing: return
 	# Only one prepared tray can wait on the assistant's table.
 	for job in job_queue.waiting:
 		if job.get("prepared",false): return
@@ -827,6 +936,7 @@ func _try_prepare_next() -> void:
 	_prepare_next(job,recipe)
 
 func _prepare_next(job: Dictionary, recipe: Dictionary) -> void:
+	var epoch:=work_generation
 	preparing_job_id=job.id
 	job.preparing=true
 	preparing_duration=recipe.prep
@@ -834,7 +944,8 @@ func _prepare_next(job: Dictionary, recipe: Dictionary) -> void:
 	room.set_assistant_work(true,recipe.id,recipe.batch)
 	_save_progress()
 	_queue_changed()
-	await get_tree().create_timer(preparing_duration).timeout
+	await _wait_work(preparing_duration)
+	if epoch!=work_generation: return
 	if preparing_job_id!=int(job.id): return
 	job.preparing=false
 	job.prepared=true
@@ -860,7 +971,7 @@ func _set_auto_restock(enabled: bool) -> void:
 
 func _plan_autonomous_batch() -> void:
 	auto_status=""
-	if not auto_restock or room.editing or job_queue.waiting.size()>=job_queue.LIMIT: return
+	if not auto_restock or room.editing or job_queue.waiting.size()>=job_queue.limit: return
 	var projected: Dictionary=inventory.stock.duplicate()
 	var available:=inventory.free_space()
 	if inventory.reserved_count>0: projected[inventory.reserved_id]=int(projected.get(inventory.reserved_id,0))+inventory.reserved_count
@@ -869,8 +980,8 @@ func _plan_autonomous_batch() -> void:
 		projected[recipe.id]=int(projected.get(recipe.id,0))+int(recipe.batch)
 		available-=int(recipe.batch)
 	var candidates: Array[String]=Catalog.unlocked_ids(experience)
-	var requested: String=room.current_recipe_id
-	if room.customer_state in ["ordering","to_display","waiting"] and requested in candidates:
+	var requested: String=room.service.needed_recipe() if room.service!=null else room.current_recipe_id
+	if (room.service!=null or room.customer_state in ["ordering","to_display","waiting"]) and requested in candidates:
 		candidates.erase(requested)
 		candidates.push_front(requested)
 	for id in candidates:
@@ -892,3 +1003,69 @@ func _plan_autonomous_batch() -> void:
 		_save_progress()
 		_queue_changed()
 		return
+
+func _setup_customer_service() -> void:
+	room.customer.visible=false
+	room.customer_state="absent"
+	var service=preload("res://customer_service.gd").new()
+	room.add_child(service)
+	room.service=service
+	service.setup(self,room)
+	service.configure(purchased,Catalog.level_for_xp(experience),"cashier" in hired_staff)
+	service_label.visible=true
+
+func _configure_staff() -> void:
+	job_queue.limit=8 if "staff_tasks" in purchased else 5
+	room.chef_move_speed=3.08 if "staff_walk" in purchased else 2.2
+	room.helper_enabled=Catalog.level_for_xp(experience)>=7 and "assistant" in hired_staff
+	room._position_assistant()
+	if room.service!=null: room.service.configure(purchased,Catalog.level_for_xp(experience),"cashier" in hired_staff)
+
+func _open_progression() -> void:
+	progression_panel.show_map(experience)
+
+func _open_staff(note: String="") -> void:
+	equipment_shop.hide()
+	staff_panel.show_staff(Catalog.level_for_xp(experience),coins,hired_staff,purchased,busy or taking_order or preparing_job_id>=0 or room.editing,note)
+
+func _hire_staff(id: String) -> void:
+	var entry:=preload("res://staff_catalog.gd").role(id)
+	if entry.is_empty() or id in hired_staff: return
+	if Catalog.level_for_xp(experience)<int(entry.level):
+		_open_staff("Найм доступен с уровня %d." % entry.level)
+		return
+	for required in entry.requires:
+		if required not in purchased:
+			_open_staff("Сначала нужно рабочее место для сотрудника.")
+			return
+	if room.editing:
+		_open_staff("Заверши расстановку перед наймом.")
+		return
+	hired_staff.append(id)
+	_configure_staff()
+	_save_progress()
+	_refresh()
+	_open_staff("Кассир выйдет после завершения текущего заказа кондитером." if id=="cashier" and room.service!=null and room.service.using_chef else entry.title+" теперь в команде.")
+
+func _purchase_feedback(id: String, message: String="") -> void:
+	if id.begins_with("staff_"): _open_staff(message)
+	else: _open_shop(message)
+
+func _wait_work(duration: float) -> void:
+	var epoch:=work_generation
+	var left:=duration
+	while left>0:
+		await get_tree().process_frame
+		if epoch!=work_generation: return
+		if not room.editing and not relocating_work: left-=get_process_delta_time()
+
+func _resume_layout_work(generation: int) -> void:
+	var epoch:=work_generation
+	if busy and stage_has_started and remaining>0 and not active_step.is_empty() and not active_step.passive and not taking_order:
+		relocating_work=true
+		room.chef.working=false
+		await _visit(active_step.station,"Возвращаемся к оборудованию после перестановки")
+		if epoch!=work_generation: return
+		if generation!=layout_generation or room.editing: return
+		room.chef.working=true
+	relocating_work=false

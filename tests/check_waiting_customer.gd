@@ -13,7 +13,7 @@ func check() -> void:
 	Engine.time_scale=12
 	game=load("res://tests/game_fixture.gd").new()
 	root.add_child(game)
-	game.experience=113
+	game.experience=218
 	game.inventory.stock.croissant=17
 	game.room.customer_delay=1000
 	game._refresh()
@@ -28,7 +28,7 @@ func check() -> void:
 	game.room.customer.set_order(game.Catalog.get_recipe("cupcake"))
 	game.customer_wait_remaining=0.2
 	await wait_state("leaving")
-	require(not game.room.customer.paid and game.coins==0 and game.experience==113,"Unfulfilled customer leaves without rewards")
+	require(not game.room.customer.paid and game.coins==0 and game.experience==218,"Unfulfilled customer leaves without rewards")
 	require(game.inventory.total()==17,"No stock is discarded automatically")
 	await wait_state("absent")
 	game.room.pending_new_recipe=""

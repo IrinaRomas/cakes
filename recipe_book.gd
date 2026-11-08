@@ -4,6 +4,7 @@ signal production_requested(id: String)
 signal discard_requested(id: String)
 signal auto_restock_changed(enabled: bool)
 var auto_toggle: CheckButton
+signal progression_requested
 signal shop_requested
 const Equipment = preload("res://equipment_catalog.gd")
 const Catalog = preload("res://recipes.gd")
@@ -30,6 +31,11 @@ func _ready() -> void:
 	auto_toggle.custom_minimum_size.y=44
 	auto_toggle.toggled.connect(func(enabled: bool): auto_restock_changed.emit(enabled))
 	outer.add_child(auto_toggle)
+	var map_button:=Button.new()
+	map_button.text="Карта уровней"
+	map_button.custom_minimum_size.y=40
+	map_button.pressed.connect(func(): progression_requested.emit())
+	outer.add_child(map_button)
 	var scroll:=ScrollContainer.new()
 	scroll.custom_minimum_size=Vector2(450,260)
 	scroll.size_flags_vertical=Control.SIZE_EXPAND_FILL

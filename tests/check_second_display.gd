@@ -20,12 +20,12 @@ func check() -> void:
 	game._purchase_equipment("display")
 	game._purchase_equipment("display_extra")
 	require(game.coins==200 and game.Equipment.display_count(game.purchased)==1,"Both purchase routes enforce level gate without charging")
-	game.experience=25
+	game.experience=60
 	game._open_shop()
 	require(not game.equipment_shop.list.get_child(2).disabled,"Second level unlocks second-display purchase")
 	game.room.pause_customers()
 	game.room.customer_delay=1000
-	game.experience=75
+	game.experience=180
 	game.purchased.append("decorator")
 	game.room.apply_purchases(game.purchased)
 	game.inventory.stock.croissant=17

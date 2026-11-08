@@ -14,6 +14,8 @@ var owned_equipment: Array[String] = ["register"]
 var editing := false
 var selected := -1
 var objects: Array[Node2D] = []
+var service: Node2D
+var chef_move_speed:=2.2
 var unit := 48.0
 var origin := Vector2.ZERO
 var display_badge: Label
@@ -30,6 +32,7 @@ var interaction_blocked := false
 var extra_stock_visual: Node2D
 var extra_display_badge: Label
 var assistant: Node2D
+var helper_enabled:=false
 var assistant_active:=false
 var stock_visual: Node2D
 var work_markers: Array[Control]=[]
@@ -147,6 +150,7 @@ func _arrange() -> void:
 		objects[i].modulate = Color("c7e6b3") if selected == i else Color.WHITE
 	_update_chef()
 	_position_assistant()
+	if service!=null: service.refresh_positions()
 	_position_badge()
 	_position_work_markers()
 	queue_redraw()
@@ -169,13 +173,26 @@ func _draw() -> void:
 				draw_polyline(PackedVector2Array([points[0], points[1], points[2], points[3], points[0]]), Color("b6bca9"), 1.0)
 
 func set_editing(value: bool) -> void:
-	if busy:
-		return
-	editing = value
-	if value:
-		pause_customers()
-	selected = -1
+	editing=value
+	chef.set_process(not value)
+	assistant.set_process(not value)
+	customer.set_process(not value)
+	if service!=null:
+		service.cashier.set_process(not value)
+		for item in service.customers: item.node.set_process(not value)
+		if not value: service.resume_layout()
+	if not value: _resume_chef_route()
+	selected=-1
 	_arrange()
+
+func _resume_chef_route() -> void:
+	if not walking: return
+	if route_station>=0:
+		route=station_path(route_station,Vector2i(chef_position.round()))
+	else:
+		route.clear()
+		walking=false
+		chef.walking=false
 
 func _select(index: int) -> void:
 	if dragged or not is_owned(index):
@@ -203,6 +220,9 @@ func _gui_input(event: InputEvent) -> void:
 			if i != selected and is_owned(i) and cells[i] == cell:
 				hint_changed.emit("Эта клетка занята. Выбери другую.")
 				return
+		if service!=null and service.actor_at(cell):
+			hint_changed.emit("Здесь стоит человек. Выбери свободную клетку.")
+			return
 		if cell == Vector2i(chef_position.round()):
 			hint_changed.emit("Здесь стоит кондитер. Выбери другую клетку.")
 			return
@@ -215,13 +235,23 @@ func _gui_input(event: InputEvent) -> void:
 var chef: Node2D
 var chef_position := Vector2(2, 4)
 var route: Array[Vector2i] = []
+var route_station:=-1
 var walking := false
 var busy := false
 signal arrived
 
 func _process(delta: float) -> void:
-	_customer_step(delta)
+	if editing: return
+	if walking and route.is_empty() and route_station>=0:
+		route=station_path(route_station,Vector2i(chef_position.round()))
+	if service==null: _customer_step(delta)
 	if walking and not route.is_empty():
+		if service!=null and service.is_cell_blocked(route[0]):
+			if chef_position.is_equal_approx(chef_position.round()):
+				var alternative:=find_path(Vector2i(chef_position.round()),route.back())
+				if not alternative.is_empty(): route=alternative
+			_update_chef()
+			return
 		if customer_state != "absent" and route[0] == Vector2i(customer_position.round()):
 			if chef_position.is_equal_approx(chef_position.round()):
 				var alternative := find_path(Vector2i(chef_position.round()), route.back(), Vector2i(customer_position.round()))
@@ -232,13 +262,14 @@ func _process(delta: float) -> void:
 		var target := Vector2(route[0])
 		var direction := project(target) - project(chef_position)
 		chef.facing_left = direction.x < 0 if absf(direction.x) > 0.01 else chef.facing_left
-		chef_position = chef_position.move_toward(target, delta * 2.2)
+		chef_position = chef_position.move_toward(target, delta * chef_move_speed)
 		if chef_position.distance_to(target) < 0.001:
 			chef_position = target
 			route.pop_front()
 			if route.is_empty():
 				walking = false
 				chef.walking = false
+				route_station=-1
 				arrived.emit()
 	_update_chef()
 
@@ -262,7 +293,7 @@ func find_path(start: Vector2i, goal: Vector2i, blocked := Vector2i(-99, -99)) -
 			return path
 		for direction in [Vector2i.DOWN, Vector2i.RIGHT, Vector2i.UP, Vector2i.LEFT]:
 			var next: Vector2i = current + direction
-			if next.x < 0 or next.y < 0 or next.x >= CELLS or next.y >= CELLS or is_occupied(next) or next == blocked or previous.has(next):
+			if next.x < 0 or next.y < 0 or next.x >= CELLS or next.y >= CELLS or is_occupied(next) or next == blocked or previous.has(next) or (service!=null and service.is_cell_blocked(next)):
 				continue
 			previous[next] = current
 			frontier.append(next)
@@ -296,6 +327,7 @@ func can_complete_order(stations: Array = [2,0,1]) -> bool:
 	return true
 
 func walk_to_station(index: int) -> bool:
+	route_station=index
 	route = station_path(index, Vector2i(chef_position.round()))
 	if route.is_empty():
 		return false
@@ -468,6 +500,7 @@ func finish_customer(paid: bool = true) -> void:
 	customer_changed.emit()
 
 func pause_customers() -> void:
+	if service!=null: service.clear_customers()
 	customer_state = "absent"
 	customer_route.clear()
 	customer.visible = false
@@ -564,7 +597,7 @@ func _input(event: InputEvent) -> void:
 func is_owned(index: int) -> bool:
 	return index >= 0 and index < Equipment.IDS.size() and Equipment.IDS[index] in owned_equipment
 
-func is_occupied(cell: Vector2i) -> bool:
+func is_equipment_at(cell: Vector2i) -> bool:
 	for i in range(cells.size()):
 		if is_owned(i) and cells[i] == cell:
 			return true
@@ -585,6 +618,7 @@ func prepare_purchase(index: int) -> bool:
 		for y in range(CELLS):
 			candidates.append(Vector2i(x,y))
 	for cell in candidates:
+		if service!=null and (service.is_cell_blocked(cell) or cell==service._register_cell()): continue
 		if is_occupied(cell) or cell == Vector2i(chef_position.round()):
 			continue
 		if customer_state != "absent" and (cell == Vector2i(customer_position.round()) or cell == customer_target or cell in customer_route):
@@ -672,7 +706,23 @@ func set_assistant_work(active: bool, recipe: String="croissant", quantity: int=
 
 func _position_assistant() -> void:
 	if assistant==null: return
-	assistant.visible=is_owned(8)
+	assistant.visible=is_owned(8) and helper_enabled
 	assistant.unit=unit
 	assistant.position=project(Vector2(cells[8])+Vector2(0.5,1.3))
 	assistant.z_index=cells[8].x+cells[8].y+2
+
+func is_occupied(cell: Vector2i) -> bool:
+	return is_equipment_at(cell)
+
+func park_chef() -> void:
+	if service==null or walking or service.using_chef: return
+	for goal in [Vector2i(2,2),Vector2i(1,2),Vector2i(3,1),Vector2i(1,0),Vector2i(0,1)]:
+		if is_equipment_at(goal) or service.is_cell_blocked(goal) or goal==service._register_cell(): continue
+		if Vector2i(chef_position.round())==goal: return
+		var path:=find_path(Vector2i(chef_position.round()),goal)
+		if path.is_empty(): continue
+		route_station=-1
+		route=path
+		walking=true
+		chef.walking=true
+		return

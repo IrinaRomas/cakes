@@ -34,7 +34,7 @@ func check() -> void:
 	require(game.coins == 50 and game.room.recipe_pool == ["croissant"], "Starter kit costs 450 and enables first recipe")
 	game._purchase_equipment("oven")
 	require(game.coins == 50, "Duplicate purchase does not charge")
-	game.experience = 25
+	game.experience = 60
 	game._refresh()
 	game._purchase_equipment("forming")
 	require(game.coins == 50 and "forming" not in game.purchased, "Insufficient funds rejected")
@@ -56,7 +56,7 @@ func check() -> void:
 	await await_batch()
 	require(game.inventory.count_of("cookie") == 8, "Forming station participates in cookie batch")
 	require(visited.size() >= 4, "Chef visits mixer, forming table, oven and display")
-	game.experience = 75
+	game.experience = 180
 	game.coins = 300
 	game._purchase_equipment("decorator")
 	require(game.coins == 120 and "cupcake" in game.room.recipe_pool, "Level-three station enables cupcake")
