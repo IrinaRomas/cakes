@@ -215,7 +215,7 @@ func _target_pressed() -> void:
 		advance(3)
 		game._start_batch("croissant")
 	elif step==4:
-		body.text="Заказ готов\nКруассан × 1\nВ витрине: %d\n\nЗа продажу: 15 монет и 5 опыта" % game.inventory.count_of("croissant")
+		body.text="Заказ готов\nКруассан × 1\nВ витрине: %d\n\nЗа продажу: 15 монет\nЗа первое задание: 30 монет и 60 опыта" % game.inventory.count_of("croissant")
 		action.text="Отдать"
 		dialog.popup_centered(Vector2i(420,280))
 func _act() -> void:
@@ -231,6 +231,8 @@ func _act() -> void:
 		game.scale=Vector2.ONE
 		game.position=Vector2.ZERO
 		advance(5)
+		if game.tasks.index==0 and game.tasks.complete():
+			game._claim_task_reward()
 		game.auto_restock=true
 		game.room.pan_offset=Vector2.ZERO
 		game.room._arrange()

@@ -5,6 +5,9 @@ signal new_game_requested
 const Equipment = preload("res://equipment_catalog.gd")
 var list: VBoxContainer
 var message: Label
+var scroll: ScrollContainer
+var focused_id:=""
+var focused_item: Control
 
 func _ready() -> void:
 	super._ready()
@@ -23,7 +26,7 @@ func _ready() -> void:
 	message.add_theme_color_override("font_color", Color("344b3f"))
 	message.add_theme_font_size_override("font_size", 20)
 	outer.add_child(message)
-	var scroll := ScrollContainer.new()
+	scroll = ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(540, 240)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -45,7 +48,9 @@ func _ready() -> void:
 	close.pressed.connect(hide)
 	footer.add_child(close)
 
-func show_shop(coins: int, level: int, purchased: Array[String], busy: bool, editing: bool, note: String = "") -> void:
+func show_shop(coins: int, level: int, purchased: Array[String], busy: bool, editing: bool, note: String = "", target_id: String = "") -> void:
+	focused_id=target_id
+	focused_item=null
 	message.text = "Магазин оборудования · %d монет\n%s" % [coins, note if not note.is_empty() else "Для начала купи витрину, миксер и печь — всего 450 монет."]
 	for child in list.get_children():
 		list.remove_child(child)
@@ -59,6 +64,16 @@ func show_shop(coins: int, level: int, purchased: Array[String], busy: bool, edi
 		if entry.id=="display": title.text += " · в зале: %d" % quantity
 		title.add_theme_color_override("font_color", Color("344b3f"))
 		title.add_theme_font_size_override("font_size", 20)
+		if entry.id==focused_id:
+			title.text="По заданию: "+title.text
+			var highlight:=StyleBoxFlat.new()
+			highlight.bg_color=Color("fff0b9")
+			highlight.border_color=Color("c79535")
+			highlight.set_border_width_all(2)
+			highlight.set_corner_radius_all(8)
+			highlight.set_content_margin_all(10)
+			title.add_theme_stylebox_override("normal",highlight)
+			focused_item=title
 		list.add_child(title)
 		var detail := Label.new()
 		detail.size.x = 520
@@ -70,6 +85,7 @@ func show_shop(coins: int, level: int, purchased: Array[String], busy: bool, edi
 		list.add_child(detail)
 		var button := Button.new()
 		button.custom_minimum_size.y = 44
+		button.name="Buy_"+entry.id
 		button.text = "Купить за %d" % entry.price
 		button.disabled = true
 		if entry.id in purchased and (entry.id!="display" or quantity>=2):
@@ -91,3 +107,8 @@ func show_shop(coins: int, level: int, purchased: Array[String], busy: bool, edi
 		button.pressed.connect(func(): purchase_requested.emit(entry.id))
 		list.add_child(button)
 	popup_centered(Vector2i(600, 540))
+	call_deferred("_reveal_target")
+
+func _reveal_target() -> void:
+	if visible and is_instance_valid(focused_item):
+		scroll.scroll_vertical=int(focused_item.position.y)

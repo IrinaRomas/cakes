@@ -1,0 +1,33 @@
+extends SceneTree
+var failed:=false
+func _initialize() -> void: call_deferred("check")
+func require(ok: bool, message: String) -> void:
+	if not ok: failed=true; push_error(message)
+func check() -> void:
+	var game=load("res://tests/shop_fixture.gd").new()
+	root.add_child(game)
+	game.equipment_shop.hide()
+	require(not game.tasks_new_badge.visible,"Locked task has no NEW badge")
+	for id in ["display","mixer","oven"]: game._purchase_equipment(id)
+	require(game.tasks_new_badge.visible and game.tasks_new_badge.text=="NEW","Activation shows a NEW badge")
+	var restored=load("res://sales_tasks.gd").new()
+	restored.restore(game._progress_data())
+	require(restored.unread,"Unseen task survives reload")
+	game._open_tasks()
+	require(not game.tasks.unread and not game.tasks_new_badge.visible,"Viewing tasks clears NEW")
+	restored.restore(game._progress_data())
+	require(not restored.unread,"Viewed task remains viewed after reload")
+	game.tasks_panel.hide()
+	game._refresh()
+	require(not game.tasks_new_badge.visible,"Refresh does not mark viewed task as new")
+	game.inventory.stock.croissant=1
+	game._sell_recipe("croissant")
+	require(game.tasks_button.text=="!","Reward-ready marker remains available")
+	game._claim_task_reward()
+	require(game.tasks.index==1 and game.tasks_new_badge.visible,"Next task gets its own NEW badge")
+	game.level_up_panel.hide()
+	game._open_tasks()
+	game._refresh()
+	require(not game.tasks_new_badge.visible,"Viewing next task clears its badge")
+	print("PASS: NEW badge on activation, viewed state, save/restore, reward marker, next task")
+	quit(1 if failed else 0)

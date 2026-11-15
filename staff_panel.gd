@@ -6,6 +6,9 @@ const Staff=preload("res://staff_catalog.gd")
 const Equipment=preload("res://equipment_catalog.gd")
 var list: VBoxContainer
 var heading: Label
+var scroll: ScrollContainer
+var focused_id:=""
+var focused_item: Control
 func _ready() -> void:
 	super._ready()
 	var style:=StyleBoxFlat.new()
@@ -22,7 +25,7 @@ func _ready() -> void:
 	heading.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
 	heading.add_theme_color_override("font_color",Color("344b3f"))
 	box.add_child(heading)
-	var scroll:=ScrollContainer.new()
+	scroll=ScrollContainer.new()
 	scroll.custom_minimum_size=Vector2(540,260)
 	scroll.size_flags_vertical=Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode=ScrollContainer.SCROLL_MODE_DISABLED
@@ -44,7 +47,9 @@ func text_row(value: String) -> void:
 	label.add_theme_color_override("font_color",Color("344b3f"))
 	label.text=value
 	list.add_child(label)
-func show_staff(level: int, coins: int, hired: Array[String], purchased: Array[String], busy: bool, note: String="") -> void:
+func show_staff(level: int, coins: int, hired: Array[String], purchased: Array[String], busy: bool, note: String="", target_id: String="") -> void:
+	focused_id=target_id
+	focused_item=null
 	heading.text="Персонал · %d/3 сотрудника · %d монет\n%s" % [hired.size(),coins,note if not note.is_empty() else "Новые сотрудники не выходят автоматически — найми их здесь."]
 	for child in list.get_children():
 		list.remove_child(child)
@@ -76,6 +81,12 @@ func show_staff(level: int, coins: int, hired: Array[String], purchased: Array[S
 		var button:=Button.new()
 		button.custom_minimum_size.y=44
 		button.name="Upgrade_"+entry.id
+		if entry.id==focused_id:
+			focused_item=list.get_child(list.get_child_count()-1)
+			var highlight:=StyleBoxFlat.new()
+			highlight.bg_color=Color("fff0b9")
+			highlight.set_content_margin_all(10)
+			focused_item.add_theme_stylebox_override("normal",highlight)
 		button.disabled=true
 		if entry.id in purchased: button.text="Улучшение куплено"
 		elif level<entry.level: button.text="Откроется на уровне %d" % entry.level
@@ -87,3 +98,7 @@ func show_staff(level: int, coins: int, hired: Array[String], purchased: Array[S
 		button.pressed.connect(func(): upgrade_requested.emit(entry.id))
 		list.add_child(button)
 	popup_centered(Vector2i(600,540))
+	call_deferred("_reveal_target")
+
+func _reveal_target() -> void:
+	if visible and is_instance_valid(focused_item): scroll.scroll_vertical=int(focused_item.position.y)

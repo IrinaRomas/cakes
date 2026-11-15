@@ -5,6 +5,7 @@ var onboarding_saved_step:=-1
 var tasks=preload("res://sales_tasks.gd").new()
 var tasks_panel: Control
 var tasks_button: Button
+var tasks_new_badge: Label
 var work_generation:=0
 var relocating_work:=false
 var layout_generation:=0
@@ -102,9 +103,28 @@ func _ready() -> void:
 	tasks_button.tooltip_text="Задания"
 	tasks_button.pressed.connect(_open_tasks)
 	header.add_child(tasks_button)
+	tasks_new_badge=Label.new()
+	tasks_new_badge.text="NEW"
+	tasks_new_badge.mouse_filter=Control.MOUSE_FILTER_IGNORE
+	tasks_new_badge.add_theme_font_size_override("font_size",12)
+	tasks_new_badge.add_theme_color_override("font_color",Color.WHITE)
+	var badge_style:=StyleBoxFlat.new()
+	badge_style.bg_color=Color("e31b85")
+	badge_style.set_corner_radius_all(7)
+	badge_style.content_margin_left=5
+	badge_style.content_margin_right=5
+	badge_style.content_margin_top=2
+	badge_style.content_margin_bottom=2
+	tasks_new_badge.add_theme_stylebox_override("normal",badge_style)
+	tasks_button.add_child(tasks_new_badge)
+	tasks_new_badge.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	tasks_new_badge.position=Vector2(tasks_button.size.x-26,-6)
+	tasks_button.resized.connect(func(): tasks_new_badge.position=Vector2(tasks_button.size.x-26,-6))
+	tasks_new_badge.hide()
 	tasks_panel=preload("res://tasks_panel.gd").new()
 	add_child(tasks_panel)
 	tasks_panel.reward_requested.connect(_claim_task_reward)
+	tasks_panel.shop_requested.connect(_open_task_shop)
 	tasks_panel.task_selected.connect(func():
 		tasks_panel.hide()
 		if onboarding!=null and onboarding.step==0: onboarding.advance(1)
@@ -769,12 +789,13 @@ func _orderable_recipe_ids() -> Array[String]:
 			ready.append(id)
 	return ready
 
-func _open_shop(note: String = "") -> void:
+func _open_shop(note: String = "", target_id: String = "") -> void:
+	if target_id.is_empty() and equipment_shop.visible: target_id=equipment_shop.focused_id
 	if staff_panel!=null: staff_panel.hide()
 	var message := note
 	if message.is_empty() and Equipment.missing(Catalog.RECIPES[0], purchased).is_empty():
 		message = "Новые аппараты открываются вместе с уровнями и рецептами."
-	equipment_shop.show_shop(coins, Catalog.level_for_xp(experience), purchased, busy or taking_order or preparing_job_id>=0, room.editing, message)
+	equipment_shop.show_shop(coins, Catalog.level_for_xp(experience), purchased, busy or taking_order or preparing_job_id>=0, room.editing, message,target_id)
 
 func _purchase_equipment(id: String) -> void:
 	if id=="display" and "display" in purchased: id="display_extra"
@@ -801,6 +822,7 @@ func _purchase_equipment(id: String) -> void:
 		return
 	coins -= int(entry.price)
 	purchased.append(id)
+	tasks.sync(experience,purchased)
 	room.apply_purchases(purchased)
 	_configure_staff()
 	_save_progress()
@@ -1059,9 +1081,10 @@ func _configure_staff() -> void:
 func _open_progression() -> void:
 	progression_panel.show_map(experience)
 
-func _open_staff(note: String="") -> void:
+func _open_staff(note: String="", target_id: String="") -> void:
+	if target_id.is_empty() and staff_panel.visible: target_id=staff_panel.focused_id
 	equipment_shop.hide()
-	staff_panel.show_staff(Catalog.level_for_xp(experience),coins,hired_staff,purchased,busy or taking_order or preparing_job_id>=0 or room.editing,note)
+	staff_panel.show_staff(Catalog.level_for_xp(experience),coins,hired_staff,purchased,busy or taking_order or preparing_job_id>=0 or room.editing,note,target_id)
 
 func _hire_staff(id: String) -> void:
 	var entry:=preload("res://staff_catalog.gd").role(id)
@@ -1110,7 +1133,12 @@ func _refresh_tasks() -> void:
 	if tasks_button!=null:
 		tasks_button.text="!" if tasks.complete() else ""
 		tasks_button.tooltip_text="Задания · доступна награда" if tasks.complete() else "Задания"
-	if tasks_panel!=null and tasks_panel.visible: tasks_panel.refresh(tasks)
+	if tasks_panel!=null and tasks_panel.visible:
+		tasks_panel.refresh(tasks)
+		tasks.mark_seen()
+	if tasks_new_badge!=null:
+		tasks_new_badge.visible=tasks.unread
+		if tasks.unread and not tasks.complete(): tasks_button.tooltip_text="Задания · новое задание"
 
 func _open_tasks() -> void:
 	_refresh_tasks()
@@ -1119,6 +1147,9 @@ func _open_tasks() -> void:
 		tasks_panel.show_current_task(tasks)
 	else:
 		tasks_panel.show_tasks(tasks)
+	tasks.mark_seen()
+	tasks_new_badge.hide()
+	_save_progress()
 
 func _claim_task_reward() -> void:
 	var reward: Dictionary=tasks.claim()
@@ -1153,3 +1184,13 @@ func _start_onboarding() -> void:
 	onboarding.begin(0)
 	_refresh()
 	_save_progress()
+
+func _open_task_shop() -> void:
+	tasks_panel.hide()
+	if tasks.index<tasks.GOALS.size():
+		for id in tasks.GOALS[tasks.index].get("equipment",[]):
+			if id not in purchased:
+				if id.begins_with("staff_"): _open_staff("По заданию: "+str(Equipment.item(id).title),id)
+				else: _open_shop("Купи для задания: "+str(Equipment.item(id).title),id)
+				return
+	_open_shop()
