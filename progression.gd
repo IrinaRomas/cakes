@@ -28,3 +28,6 @@ static func migrate_xp(data: ConfigFile, xp: int) -> int:
 	for index in range(OLD_XP.size()):
 		if xp>=OLD_XP[index]: old_level=index+1
 	return int(LEVEL_XP[old_level-1])+xp-int(OLD_XP[old_level-1])
+
+static func level_reward(level: int) -> int:
+	return level*40

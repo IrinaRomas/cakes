@@ -25,9 +25,10 @@ func check() -> void:
 	var coins: int=game.coins
 	var xp: int=game.experience
 	game._claim_task_reward()
-	require(game.coins==coins+30 and game.experience==xp+5 and game.tasks.index==1,"Claim pays reward and advances")
+	require(game.Catalog.level_for_xp(game.experience)==2 and game.level_up_panel.visible,"First task immediately unlocks level two and its celebration")
+	require(game.coins==coins+110 and game.experience==xp+60 and game.tasks.index==1,"Claim pays reward and advances")
 	game._claim_task_reward()
-	require(game.coins==coins+30 and game.tasks.counts.is_empty(),"No duplicate rewards or retroactive sales")
+	require(game.coins==coins+110 and game.tasks.counts.is_empty(),"No duplicate rewards or retroactive sales")
 	require(game.tasks.active,"Next available goal starts immediately")
 	game._start_new_game()
 	require(game.tasks.index==0 and game.tasks.counts.is_empty() and not game.tasks.active,"New game resets tasks")

@@ -1,12 +1,15 @@
 extends RefCounted
 const GOALS=[
-	{"title":"Первая выпечка","needs":{"croissant":6},"coins":30,"xp":5},
-	{"title":"Любимые круассаны","needs":{"croissant":12},"coins":45,"xp":10},
-	{"title":"Попробуйте печенье","needs":{"cookie":8},"coins":40,"xp":10},
-	{"title":"На любой вкус","needs":{"croissant":6,"cookie":8},"coins":60,"xp":15},
-	{"title":"Нежные капкейки","needs":{"cupcake":6},"coins":60,"xp":15},
-	{"title":"Богатый ассортимент","needs":{"croissant":6,"cookie":8,"cupcake":6},"coins":90,"xp":20},
-	{"title":"Холодный десерт","needs":{"mousse":6},"coins":70,"xp":15}
+	{"title":"Первая выпечка","needs":{"croissant":6},"coins":30,"xp":60},
+	{"title":"Любимые круассаны","needs":{"croissant":12},"coins":45,"xp":55},
+	{"title":"Попробуйте печенье","needs":{"cookie":8},"coins":40,"xp":60},
+	{"title":"На любой вкус","needs":{"croissant":6,"cookie":8},"coins":60,"xp":60},
+	{"title":"Нежные капкейки","needs":{"cupcake":6},"coins":60,"xp":100},
+	{"title":"Богатый ассортимент","needs":{"croissant":6,"cookie":8,"cupcake":6},"coins":90,"xp":100},
+	{"title":"Холодный десерт","needs":{"mousse":6},"coins":70,"xp":300},
+	{"title":"Десерты для всех","needs":{"cookie":24,"cupcake":18,"mousse":18},"coins":150,"xp":420},
+	{"title":"Большой праздник","needs":{"croissant":30,"cookie":32,"cupcake":24,"mousse":24},"coins":220,"xp":600},
+	{"title":"Мастерская сладостей","needs":{"croissant":48,"cookie":48,"cupcake":36,"mousse":36},"coins":300,"xp":800}
 ]
 const Recipes=preload("res://recipes.gd")
 const Equipment=preload("res://equipment_catalog.gd")

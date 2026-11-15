@@ -46,7 +46,7 @@ func check() -> void:
 		scene._accept_order()
 		await wait_state("leaving")
 		require(not scene.busy and scene.inventory.count_of("croissant") == 6-count, "Customers buy individually from same batch")
-		require(scene.coins == 15*count and scene.experience == 5*count, "Per-item sale reward")
+		require(scene.coins == 15*count and scene.experience == 0, "Per-item sale reward")
 		scene._serve_customer()
 		require(scene.coins == 15*count, "No double sale")
 	# Accept and sell an existing item while the chef is making another recipe.

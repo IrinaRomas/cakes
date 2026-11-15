@@ -11,6 +11,7 @@ var layout_generation:=0
 var hired_staff: Array[String]=["chef"]
 var staff_panel: Control
 var header_menu: GridContainer
+var level_up_panel: Control
 var progression_panel: Control
 const Progression=preload("res://progression.gd")
 const Catalog = preload("res://recipes.gd")
@@ -156,6 +157,9 @@ func _ready() -> void:
 	progression_panel=preload("res://progression_panel.gd").new()
 	add_child(progression_panel)
 	progression_panel.visibility_changed.connect(_sync_room_input)
+	level_up_panel=preload("res://level_up_panel.gd").new()
+	add_child(level_up_panel)
+	level_up_panel.visibility_changed.connect(_sync_room_input)
 	level_label.mouse_filter=Control.MOUSE_FILTER_STOP
 	level_label.mouse_default_cursor_shape=Control.CURSOR_POINTING_HAND
 	level_label.tooltip_text="Карта уровней"
@@ -572,21 +576,9 @@ func _sell_recipe(id: String) -> bool:
 	var sold_recipe: Dictionary=Catalog.get_recipe(id)
 	if not inventory.take_one(sold_recipe.id): return false
 	tasks.sold(id)
-	var previous_level := Catalog.level_for_xp(experience)
 	coins += int(sold_recipe.price)
 	economy.sales_income+=int(sold_recipe.price)
-	experience += int(sold_recipe.xp)
-	last_reward = "+%d монет · +%d опыта" % [sold_recipe.price, sold_recipe.xp]
-	var new_level := Catalog.level_for_xp(experience)
-	if new_level > previous_level:
-		var opened := PackedStringArray()
-		for recipe in Catalog.RECIPES:
-			if recipe.level > previous_level and recipe.level <= new_level:
-				opened.append(recipe.title)
-		unlock_notice.text = "Уровень %d! %s" % [new_level,Progression.MILESTONES[new_level-1]]
-		_configure_staff()
-		unlock_notice.visible = true
-		notice_remaining = 8.0
+	last_reward = "+%d монет" % sold_recipe.price
 	room.set_recipe_pool(_orderable_recipe_ids())
 	baked += 1
 	_save_progress()
@@ -725,6 +717,10 @@ func _restore_progress(data: ConfigFile) -> void:
 	coins = maxi(0, int(data.get_value("progress", "coins", 0)))
 	baked = maxi(0, int(data.get_value("progress", "baked", 0)))
 	experience = Progression.migrate_xp(data,maxi(0, int(data.get_value("progress", "experience", 0))))
+	# Credit the current XP rewards for tasks already claimed in older saves.
+	var task_xp:=0
+	for i in range(tasks.index): task_xp+=int(tasks.GOALS[i].xp)
+	experience=maxi(experience,task_xp)
 	_configure_staff()
 	inventory.capacity=_storage_capacity()
 	pending_resume = inventory.restore_save(data)
@@ -838,7 +834,7 @@ func _start_new_game() -> void:
 	preparing_remaining=0
 	order_retry=0
 	for index in range(room.cells.size()): room.clear_work_status(index)
-	for modal in [new_game_dialog,recipe_book,queue_panel,progression_panel,staff_panel,tasks_panel]: modal.hide()
+	for modal in [new_game_dialog,recipe_book,queue_panel,progression_panel,level_up_panel,staff_panel,tasks_panel]: modal.hide()
 	tasks=preload("res://sales_tasks.gd").new()
 	coins = Equipment.STARTING_COINS
 	hired_staff=["chef"]
@@ -877,7 +873,7 @@ func _start_new_game() -> void:
 	else: _open_shop()
 
 func _sync_room_input() -> void:
-	room.interaction_blocked = (onboarding!=null and onboarding.active()) or (tasks_panel!=null and tasks_panel.visible) or (equipment_shop != null and equipment_shop.visible) or (recipe_book != null and recipe_book.visible) or (new_game_dialog != null and new_game_dialog.visible) or (queue_panel != null and queue_panel.visible) or (progression_panel!=null and progression_panel.visible) or (staff_panel!=null and staff_panel.visible)
+	room.interaction_blocked = (level_up_panel!=null and level_up_panel.visible) or (onboarding!=null and onboarding.active()) or (tasks_panel!=null and tasks_panel.visible) or (equipment_shop != null and equipment_shop.visible) or (recipe_book != null and recipe_book.visible) or (new_game_dialog != null and new_game_dialog.visible) or (queue_panel != null and queue_panel.visible) or (progression_panel!=null and progression_panel.visible) or (staff_panel!=null and staff_panel.visible)
 
 func _try_take_order() -> void:
 	if room.service!=null: return
@@ -1127,8 +1123,16 @@ func _open_tasks() -> void:
 func _claim_task_reward() -> void:
 	var reward: Dictionary=tasks.claim()
 	if reward.is_empty(): return
+	var previous_level:=Catalog.level_for_xp(experience)
 	coins+=int(reward.coins)
 	experience+=int(reward.xp)
+	var new_level:=Catalog.level_for_xp(experience)
+	if new_level>previous_level:
+		tasks_panel.hide()
+		var bonus:=0
+		for level in range(previous_level+1,new_level+1): bonus+=Progression.level_reward(level)
+		coins+=bonus
+		level_up_panel.show_level(new_level,bonus)
 	_configure_staff()
 	room.set_recipe_pool(_orderable_recipe_ids())
 	_refresh()
