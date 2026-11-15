@@ -89,6 +89,6 @@ func check() -> void:
 	require(copy.job_queue.limit==8 and copy.job_queue.waiting.size()==8 and copy.room.service.capacity==3 and is_equal_approx(copy.room.chef_move_speed,3.08),"Staff upgrades persist")
 	copy.queue_free()
 	game._start_new_game()
-	require(game.job_queue.limit==5 and service.capacity==1 and service.active_count()==0,"New game clears buyers and resets staff upgrades")
+	require(game.job_queue.limit==5 and service.capacity==1 and service.active_count()==1 and game.onboarding.step==0,"New game clears buyers and resets staff upgrades")
 	print("PASS: FIFO queue, cashier physical service and handover, missing-stock visibility, independent orders, no false rewards, concurrent production, staff upgrades, persistence and reset")
 	quit()

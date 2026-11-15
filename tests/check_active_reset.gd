@@ -24,13 +24,13 @@ func check() -> void:
 		require(game.new_game_dialog.visible,"Confirmation opens during "+phase)
 		game.new_game_dialog.hide()
 		game.new_game_dialog.confirmed.emit()
-		require(game.coins==500 and game.experience==0 and game.purchased==["register"],"Starter state restored")
+		require(game.coins==500 and game.experience==0 and game.purchased==["register","display","mixer","oven"],"Starter state restored")
 		await create_timer(50).timeout
 		require(not game.busy and not game.taking_order and game.inventory.total()==0 and game.inventory.reserved_count==0,"Old batch cannot complete after reset")
-		require(game.job_queue.waiting.is_empty() and game.room.service.customers.is_empty(),"Old work and customers cleared")
+		require(game.job_queue.waiting.is_empty() and game.room.service.customers.size()==1 and game.onboarding.step==0,"Old work and customers cleared")
 		require(game.coins==500 and game.experience==0,"No late rewards")
-		game._purchase_equipment("display")
-		require("display" in game.purchased,"New game accepts purchases")
+		game._open_tasks()
+		require(game.tasks_panel.visible,"New game accepts purchases")
 		game.queue_free()
 		await process_frame
 	print("PASS: new game button during preparation/baking, confirmation, cancellation of old work, no late stock/rewards and fresh purchases")

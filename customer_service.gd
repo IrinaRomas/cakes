@@ -68,6 +68,7 @@ func queue_items() -> Array[Dictionary]:
 
 func _process(delta: float) -> void:
 	if room==null or cashier==null: return
+	if game.onboarding!=null and game.onboarding.active(): return
 	cashier.visible=cashier_enabled and room.is_owned(3)
 	if room.editing: return
 	if not room.is_owned(1) or not room.is_owned(3) or room.recipe_pool.is_empty():
@@ -403,6 +404,7 @@ func needed_recipe() -> String:
 	return ""
 
 func summary() -> String:
+	if game.onboarding!=null and game.onboarding.active(): return "Первый заказ · Круассан × 1"
 	var text:="Покупатели: %d/%d · %s: %s" % [customers.size(),capacity,"кассир" if cashier_enabled else "кондитер",status]
 	var missing:=missing_orders()
 	if not missing.is_empty():
@@ -423,8 +425,8 @@ func refresh_positions() -> void:
 		actor.position=room.project(Vector2(item.pos)+Vector2(0.5,0.5))
 		actor.z_index=int(floorf(item.pos.x+item.pos.y))+1
 		actor.waiting=item.state!="leaving"
-		actor.wait_seconds=ceili(item.wait_left)
-		actor.shortfall=item.state!="leaving" and game.inventory.count_of(item.recipe)==0
+		actor.wait_seconds=-1 if game.onboarding!=null and game.onboarding.active() else ceili(item.wait_left)
+		actor.shortfall=item.state!="leaving" and game.inventory.count_of(item.recipe)==0 and not (game.onboarding!=null and game.onboarding.active())
 		actor.queue_number=waiting.find(item)+1 if item.state in ["queue","counter"] else 0
 		actor.phase_label=""
 		if item.state in ["queue","counter"]: actor.phase_label="№%d · у кассы" % (waiting.find(item)+1)

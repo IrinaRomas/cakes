@@ -1,5 +1,10 @@
 extends Control
 
+var onboarding: Control
+var onboarding_saved_step:=-1
+var tasks=preload("res://sales_tasks.gd").new()
+var tasks_panel: Control
+var tasks_button: Button
 var work_generation:=0
 var relocating_work:=false
 var layout_generation:=0
@@ -89,6 +94,21 @@ func _ready() -> void:
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 24)
 	top_panel.add_child(header)
+	tasks_button=Button.new()
+	tasks_button.icon=preload("res://assets/tasks_icon.svg")
+	tasks_button.custom_minimum_size=Vector2(48,48)
+	tasks_button.size_flags_vertical=Control.SIZE_SHRINK_BEGIN
+	tasks_button.tooltip_text="Задания"
+	tasks_button.pressed.connect(_open_tasks)
+	header.add_child(tasks_button)
+	tasks_panel=preload("res://tasks_panel.gd").new()
+	add_child(tasks_panel)
+	tasks_panel.reward_requested.connect(_claim_task_reward)
+	tasks_panel.task_selected.connect(func():
+		tasks_panel.hide()
+		if onboarding!=null and onboarding.step==0: onboarding.advance(1)
+	)
+	tasks_panel.visibility_changed.connect(_sync_room_input)
 	var identity := VBoxContainer.new()
 	identity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(identity)
@@ -171,7 +191,7 @@ func _ready() -> void:
 	equipment_shop.new_game_requested.connect(_confirm_new_game)
 	new_game_dialog = preload("res://reset_dialog.gd").new()
 	new_game_dialog.title = "Начать новую игру?"
-	new_game_dialog.dialog_text = "Начнёшь с 500 монет и пустой кондитерской.\nТекущие уровни, покупки и запасы будут сброшены."
+	new_game_dialog.dialog_text = "Начнёшь с 500 монет, базового оборудования и обучения.\nТекущие уровни, покупки и запасы будут сброшены."
 	new_game_dialog.ok_button_text = "Начать заново"
 	new_game_dialog.cancel_button_text = "Отмена"
 	new_game_dialog.confirmed.connect(_start_new_game)
@@ -242,12 +262,22 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_queue_layout)
 	top_panel.minimum_size_changed.connect(_queue_layout)
 	bottom_panel.minimum_size_changed.connect(_queue_layout)
+	onboarding=preload("res://onboarding.gd").new()
+	onboarding.game=self
+	var tutorial_layer:=CanvasLayer.new()
+	tutorial_layer.layer=5
+	add_child(tutorial_layer)
+	tutorial_layer.add_child(onboarding)
 	_load_progress()
 	room.apply_purchases(purchased)
 	_configure_staff()
 	_setup_customer_service()
 	_refresh()
-	if fresh_game:
+	if fresh_game and room.service!=null:
+		_start_onboarding()
+	elif onboarding_saved_step>=0 and room.service!=null:
+		onboarding.begin(onboarding_saved_step)
+	elif fresh_game:
 		_save_progress()
 		call_deferred("_open_shop")
 	_queue_layout()
@@ -306,7 +336,7 @@ func _process(delta: float) -> void:
 	if room.editing or relocating_work: return
 	if room.service!=null:
 		service_label.text=room.service.summary()
-		service_label.add_theme_color_override("font_color",Color("a33f37") if not room.service.missing_orders().is_empty() else Color("344b3f"))
+		service_label.add_theme_color_override("font_color",Color("a33f37") if not room.service.missing_orders().is_empty() and not (onboarding!=null and onboarding.active()) else Color("344b3f"))
 	order_retry=maxf(0.0,order_retry-delta)
 	_try_take_order()
 	_plan_autonomous_batch()
@@ -541,6 +571,7 @@ func _sell_recipe(id: String) -> bool:
 	if room.editing or "display" not in purchased: return false
 	var sold_recipe: Dictionary=Catalog.get_recipe(id)
 	if not inventory.take_one(sold_recipe.id): return false
+	tasks.sold(id)
 	var previous_level := Catalog.level_for_xp(experience)
 	coins += int(sold_recipe.price)
 	economy.sales_income+=int(sold_recipe.price)
@@ -563,6 +594,7 @@ func _sell_recipe(id: String) -> bool:
 	return true
 
 func _refresh() -> void:
+	_refresh_tasks()
 	coin_label.text = "%d монет" % coins
 	_update_level_display()
 	var recipe: Dictionary = Catalog.get_recipe(room.current_recipe_id)
@@ -651,6 +683,7 @@ func _update_level_display() -> void:
 
 func _progress_data() -> ConfigFile:
 	var data := ConfigFile.new()
+	data.set_value("onboarding","step",onboarding.step if onboarding!=null else -1)
 	data.set_value("staff","hired",PackedStringArray(hired_staff))
 	data.set_value("progression","version",Progression.VERSION)
 	data.set_value("progress", "coins", coins)
@@ -660,6 +693,7 @@ func _progress_data() -> ConfigFile:
 		data.set_value("layout", str(i), room.cells[i])
 	data.set_value("business", "version", 1)
 	data.set_value("business", "purchased", PackedStringArray(purchased))
+	tasks.write_save(data)
 	inventory.write_save(data)
 	job_queue.write_save(data)
 	economy.write_save(data)
@@ -673,6 +707,8 @@ func _save_progress() -> void:
 
 func _restore_progress(data: ConfigFile) -> void:
 	fresh_game = false
+	onboarding_saved_step=int(data.get_value("onboarding","step",-1))
+	tasks.restore(data)
 	economy.restore(data)
 	hired_staff=["chef"]
 	for role in data.get_value("staff","hired",[]):
@@ -802,7 +838,8 @@ func _start_new_game() -> void:
 	preparing_remaining=0
 	order_retry=0
 	for index in range(room.cells.size()): room.clear_work_status(index)
-	for modal in [new_game_dialog,recipe_book,queue_panel,progression_panel,staff_panel]: modal.hide()
+	for modal in [new_game_dialog,recipe_book,queue_panel,progression_panel,staff_panel,tasks_panel]: modal.hide()
+	tasks=preload("res://sales_tasks.gd").new()
 	coins = Equipment.STARTING_COINS
 	hired_staff=["chef"]
 	auto_restock=true
@@ -836,10 +873,11 @@ func _start_new_game() -> void:
 	_save_progress()
 	_queue_changed()
 	_queue_layout()
-	_open_shop()
+	if room.service!=null: _start_onboarding()
+	else: _open_shop()
 
 func _sync_room_input() -> void:
-	room.interaction_blocked = (equipment_shop != null and equipment_shop.visible) or (recipe_book != null and recipe_book.visible) or (new_game_dialog != null and new_game_dialog.visible) or (queue_panel != null and queue_panel.visible) or (progression_panel!=null and progression_panel.visible) or (staff_panel!=null and staff_panel.visible)
+	room.interaction_blocked = (onboarding!=null and onboarding.active()) or (tasks_panel!=null and tasks_panel.visible) or (equipment_shop != null and equipment_shop.visible) or (recipe_book != null and recipe_book.visible) or (new_game_dialog != null and new_game_dialog.visible) or (queue_panel != null and queue_panel.visible) or (progression_panel!=null and progression_panel.visible) or (staff_panel!=null and staff_panel.visible)
 
 func _try_take_order() -> void:
 	if room.service!=null: return
@@ -970,6 +1008,7 @@ func _set_auto_restock(enabled: bool) -> void:
 	_queue_changed()
 
 func _plan_autonomous_batch() -> void:
+	if onboarding!=null and onboarding.active(): return
 	auto_status=""
 	if not auto_restock or room.editing or job_queue.waiting.size()>=job_queue.limit: return
 	var projected: Dictionary=inventory.stock.duplicate()
@@ -1069,3 +1108,44 @@ func _resume_layout_work(generation: int) -> void:
 		if generation!=layout_generation or room.editing: return
 		room.chef.working=true
 	relocating_work=false
+
+func _refresh_tasks() -> void:
+	tasks.sync(experience,purchased)
+	if tasks_button!=null:
+		tasks_button.text="!" if tasks.complete() else ""
+		tasks_button.tooltip_text="Задания · доступна награда" if tasks.complete() else "Задания"
+	if tasks_panel!=null and tasks_panel.visible: tasks_panel.refresh(tasks)
+
+func _open_tasks() -> void:
+	_refresh_tasks()
+	if onboarding!=null and onboarding.active() and onboarding.step==0:
+		if tasks_panel.get_parent()!=onboarding.get_parent(): tasks_panel.reparent(onboarding.get_parent())
+		tasks_panel.show_current_task(tasks)
+	else:
+		tasks_panel.show_tasks(tasks)
+
+func _claim_task_reward() -> void:
+	var reward: Dictionary=tasks.claim()
+	if reward.is_empty(): return
+	coins+=int(reward.coins)
+	experience+=int(reward.xp)
+	_configure_staff()
+	room.set_recipe_pool(_orderable_recipe_ids())
+	_refresh()
+	_save_progress()
+
+func _start_onboarding() -> void:
+	equipment_shop.hide()
+	fresh_game=false
+	purchased.assign(["register","display","mixer","oven"])
+	auto_restock=false
+	room.cells[0]=Vector2i(1,0)
+	room.cells[2]=Vector2i(3,0)
+	room.cells[1]=Vector2i(0,2)
+	room.cells[3]=Vector2i(0,3)
+	room.apply_purchases(purchased)
+	room.set_recipe_pool(Catalog.unlocked_ids(0))
+	_configure_staff()
+	onboarding.begin(0)
+	_refresh()
+	_save_progress()
